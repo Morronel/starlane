@@ -6,8 +6,9 @@ signal closed
 
 var world: Node
 var _seg := {}   # key -> [btnA, btnB]
-var _reset_btn: Button
-var _reset_armed := false
+var _dev_btn: Button
+var saves: SavePanel
+var dev: DevPanel
 
 
 func _ready() -> void:
@@ -50,6 +51,8 @@ func _ready() -> void:
 	_slider(v, "Music", "music_volume")
 	_slider(v, "Effects", "sfx_volume")
 
+	_segment(v, "Dev mode", "dev_mode", ["OFF", "ON"])
+
 	var tip := Label.new()
 	tip.text = "Tip: double-tap FIRE to toggle auto-attack."
 	tip.add_theme_font_size_override("font_size", 16)
@@ -59,9 +62,12 @@ func _ready() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 16)
 	v.add_child(row)
-	_reset_btn = UiKit.button("RESET PROGRESS", Vector2(260, 58), 16)
-	_reset_btn.pressed.connect(_on_reset)
-	row.add_child(_reset_btn)
+	var saves_btn := UiKit.button("SAVES", Vector2(170, 58), 18)
+	saves_btn.pressed.connect(func(): saves.open())
+	row.add_child(saves_btn)
+	_dev_btn = UiKit.button("DEV MENU", Vector2(190, 58), 16)
+	_dev_btn.pressed.connect(func(): dev.open())
+	row.add_child(_dev_btn)
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(sp)
@@ -71,11 +77,21 @@ func _ready() -> void:
 		closed.emit())
 	row.add_child(close)
 
+	saves = SavePanel.new()
+	saves.world = world
+	saves.visible = false
+	add_child(saves)
+	saves.loaded.connect(_on_loaded)
+	dev = DevPanel.new()
+	dev.world = world
+	dev.visible = false
+	add_child(dev)
+
 
 func open() -> void:
 	visible = true
-	_reset_armed = false
-	_reset_btn.text = "RESET PROGRESS"
+	saves.visible = false
+	dev.visible = false
 	_sync()
 	modulate.a = 0.0
 	create_tween().tween_property(self, "modulate:a", 1.0, 0.2)
@@ -134,15 +150,9 @@ func _sync() -> void:
 		var on: bool = Settings.get(k)
 		_seg[k][0].button_pressed = not on
 		_seg[k][1].button_pressed = on
+	_dev_btn.visible = Settings.dev_mode
 
 
-func _on_reset() -> void:
-	if not _reset_armed:
-		_reset_armed = true
-		_reset_btn.text = "TAP AGAIN TO CONFIRM"
-		world.sfx.ui("error")
-		return
-	GameState.reset_game()
-	world.sfx.ui("click")
+func _on_loaded() -> void:
 	closed.emit()
 	world.restart_from_save()

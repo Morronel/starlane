@@ -4,15 +4,16 @@ extends Node3D
 ## overtake traffic, and choose where to drop out.
 ## Lane coordinates: s = meters along the curve, offset = Vector2 in the lane frame.
 
-const RADIUS := 150.0
-const TRAFFIC_SIDE := 70.0
-const MERGE_RANGE := 240.0   # manual ENTER LANE works this close to the lane axis
+const RADIUS := 300.0
+const TRAFFIC_SIDE := 140.0
+const MERGE_RANGE := 480.0   # manual ENTER LANE works this close to the lane axis
 
 var curve := Curve3D.new()
 var length := 0.0
 var exits: Array = []   # [{name, s}]
 var traffic: Array = [] # [{node, s, dir, speed, offset}]
 var lane_mat: ShaderMaterial
+var _core_mat: StandardMaterial3D
 
 
 func build(points: Array, exit_defs: Array) -> void:
@@ -31,6 +32,23 @@ func build(points: Array, exit_defs: Array) -> void:
 	_build_tube()
 	_build_gates()
 	_spawn_traffic()
+
+
+## Tint the lane with the current system's palette (soft, never neon).
+func set_palette(sky: Dictionary) -> void:
+	var c1 := _soften(sky["c"])
+	var c2 := _soften((sky["b"] as Color).lerp(sky["c"], 0.35))
+	lane_mat.set_shader_parameter("color", Vector3(c1.r, c1.g, c1.b))
+	lane_mat.set_shader_parameter("color2", Vector3(c2.r, c2.g, c2.b))
+	_core_mat.albedo_color = c1 * 0.45
+
+
+static func _soften(c: Color) -> Color:
+	# normalise brightness and pull saturation down a little
+	var m := maxf(c.r, maxf(c.g, c.b))
+	if m > 0.001:
+		c = c / m
+	return c.lerp(Color(0.85, 0.9, 1.0), 0.25)
 
 
 ## Lane frame at s: origin, right, up, forward.
@@ -84,8 +102,8 @@ func next_exit(s: float, dir: int) -> Dictionary:
 func _build_tube() -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var sides := 18
-	var step := 60.0
+	var sides := 24
+	var step := 70.0
 	var n := int(ceil(length / step))
 	var rings := []
 	for i in n + 1:
@@ -120,7 +138,7 @@ func _build_tube() -> void:
 		var f0 := frame(i * step)
 		var f1 := frame(minf((i + 1) * step, length))
 		for ax in [f0["right"], f0["up"]]:
-			var w: Vector3 = ax * 3.0
+			var w: Vector3 = ax * 4.0
 			var a0: Vector3 = f0["origin"] - w
 			var a1: Vector3 = f0["origin"] + w
 			var b0: Vector3 = f1["origin"] - w
@@ -129,7 +147,7 @@ func _build_tube() -> void:
 				core.add_vertex(v)
 	var cm := StandardMaterial3D.new()
 	cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	cm.albedo_color = Color(0.25, 0.7, 1.0)
+	cm.albedo_color = Color(0.25, 0.7, 1.0) * 0.6
 	cm.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
 	cm.distance_fade_min_distance = 80.0
 	cm.distance_fade_max_distance = 900.0
@@ -139,6 +157,7 @@ func _build_tube() -> void:
 	var cmi := MeshInstance3D.new()
 	cmi.mesh = core.commit()
 	cmi.material_override = cm
+	_core_mat = cm
 	cmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(cmi)
 
@@ -166,7 +185,7 @@ func _spawn_traffic() -> void:
 			traffic.append({
 				"node": node, "s": s, "dir": dir,
 				"speed": rng.randf_range(220.0, 300.0),
-				"offset": Vector2(TRAFFIC_SIDE * dir + rng.randf_range(-22, 22), rng.randf_range(-35, 35)),
+				"offset": Vector2(TRAFFIC_SIDE * dir + rng.randf_range(-45, 45), rng.randf_range(-70, 70)),
 			})
 
 

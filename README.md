@@ -6,16 +6,17 @@ The loop is short: dock, trade or take a contract, ride the space lane, fight ra
 ## What's in the prototype
 
 - **Six star systems with eighteen stations.** Each system is a ~50 km stretch of space around one long, winding space lane, with three stations, a beacon, a salvage field and two or three stargates. Every system has its own sky, sun, planet and threat level.
-- **Space lanes** are wide glowing tubes you can join anywhere. Fly into one roughly along it and you merge automatically, or tap ENTER LANE when you are close. You ride at up to 1600 m/s (2300 with boost), dodge freighter traffic and drop out wherever you like.
+- **Space lanes** are wide (600 m), softly glowing tubes tinted in the colours of the system you're in, with slow, calm light swells instead of flashing stripes. You can join them anywhere. Fly into one roughly along it and you merge automatically, or tap ENTER LANE when you are close. You ride at up to 1600 m/s (2300 with boost), dodge freighter traffic and drop out wherever you like.
 - **Destinations and autopilot.** Pick a station or a contract on the star map (or TRACK a contract at a station) and a marker shows where to go. AUTOPILOT flies there for you: it heads for the lane, rides it a bit slower than flat out, drops out, docks, and even jumps through stargates. Boost works without breaking it. Any stick input takes back control.
 - **Stargates** with limited fast travel. Each hop costs a jump charge. Refill at stations and carry more with Jump Capacitors.
 - **Hangar:** six ships, from the Sparrow interceptor to the Mule hauler and the Seraph. Trade in your current ship (60% back). Gear moves over where it fits.
 - **Outfit:** primary weapons (pulse lasers, ion repeater, scatter blaster, plasma lance, rail driver), secondary launchers with homing missiles and torpedoes, and utility gear (shields, armor, engines, cargo pods, tractor beam, nano-repair, afterburner, targeting computer, jump capacitors). Each ship has its own slot layout, and every station stocks different gear.
 - **Workshop:** salvage parts (scrap, circuits, plasma coils, lattice crystal, void shards) drop from raiders and drift in asteroid fields. Blueprints turn them into gear, including unique items like the Hellfire Repeater, Aegis Lattice and Ghost Drive. Rare blueprints drop from elite raiders or are sold at research stations.
 - **Combat:** raiders with attack runs and elites in mission waves, aim assist with a lead marker, homing missiles, and auto-attack (double-tap FIRE). Tense combat music kicks in while you're fighting.
-- **Cockpit view** (Settings → Camera → 1ST PERSON). Every hull has its own 3D cabin: the Sparrow's bubble canopy, the Wren's panoramic glass, the Kestrel's angular fighter frame with a head-up glass, the Mule's freighter bridge with a steering wheel and overhead panel, the Corsair's armoured slit and the Seraph's gold-trimmed canopy with a hologram radar. The yoke turns with your stick and roll (and with the autopilot), the throttle lever follows the throttle, and live screens show radar, ship status, nav, weapons or cargo. Indicator lights blink, the cabin lights up when you fire, and it flashes red when you are hit or the hull runs low.
+- **Cockpit view** (Settings → Camera → 1ST PERSON). Every hull has its own 3D cabin: the Sparrow's bubble canopy, the Wren's panoramic glass, the Kestrel's angular fighter frame with a head-up glass, the Mule's freighter bridge with a steering wheel and overhead panel, the Corsair's armoured slit and the Seraph's gold-trimmed canopy with a hologram radar. The yoke turns with your stick and roll (and with the autopilot), the throttle lever follows the throttle, and live screens show radar, ship status, nav, weapons or cargo. A head-up readout (speed, throttle, shield and hull) sits beside the crosshair in every cabin. Indicator lights blink, the cabin lights up when you fire, and it flashes red when you are hit or the hull runs low.
 - **Station screen** with drag-anywhere kinetic scrolling (a drag never presses the button under your finger), animated cards, rolling credits, popups and sparkles.
-- **Progress is saved** automatically on dock, launch and jump. Saves from 0.2 carry over your credits, cargo, contracts and location.
+- **Saves:** the game autosaves on dock, launch and jump. Settings → SAVES has three manual slots (save, load, delete) and NEW GAME. Saves from 0.2 and later carry over.
+- **Dev mode** (Settings → Dev mode → ON) adds a DEV MENU for testing: credits, repairs, missiles, jump charges, parts, all blueprints, a full cargo hold, any ship and any gear.
 
 ## Controls
 
@@ -52,6 +53,6 @@ For release signing, set `GODOT_ANDROID_KEYSTORE_RELEASE_PATH`, `_USER` and `_PA
 
 ## Dev tools
 
-- `godot --headless -- --simtest` runs a scripted gameplay check. It covers autopilot via the lane to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, the cockpit view, an automatic lane merge, death and respawn, and save/load.
+- `godot --headless -- --simtest` runs a scripted gameplay check. It covers autopilot via the lane to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, the cockpit view, save slots, an automatic lane merge, death and respawn, and save/load.
 - `godot -- --autotest=/some/dir` saves a set of screenshots from a scripted flight.
 - `godot -- --cockpits=/some/dir` saves one cockpit screenshot per ship (set `COCKPITS=mule,seraph` to pick hulls).
