@@ -1,6 +1,6 @@
 class_name StationMenu
 extends Control
-## Docked station screen. Tabs: contracts, market, shipyard, services.
+## Docked station screen. Tabs: contracts, market, hangar, outfit, workshop, services.
 ## Built for touch: big targets, animated feedback, satisfying sounds.
 
 signal launch_pressed
@@ -11,7 +11,9 @@ var station: Station
 var world: Node
 var _tab := "missions"
 var _content: VBoxContainer
-var _scroll: ScrollContainer
+var _scroll: KineticScroll
+var _inspect := ""          # ship shown in the hangar preview
+var _confirm := {}          # button key -> msec deadline for two-tap purchases
 var _rail_btns := {}
 var _header: Control
 var _shown_credits := 0.0
@@ -24,7 +26,9 @@ var _preview_ship: Node3D
 const TABS := [
 	["missions", "CONTRACTS", "target"],
 	["market", "MARKET", "crate"],
-	["shipyard", "SHIPYARD", "ship"],
+	["hangar", "HANGAR", "hangar"],
+	["outfit", "OUTFIT", "bolt"],
+	["workshop", "WORKSHOP", "blueprint"],
 	["services", "SERVICES", "wrench"],
 ]
 
@@ -43,7 +47,7 @@ func _ready() -> void:
 	# left rail
 	var rail := VBoxContainer.new()
 	rail.name = "Rail"
-	rail.add_theme_constant_override("separation", 10)
+	rail.add_theme_constant_override("separation", 7)
 	add_child(rail)
 	for t in TABS:
 		var b := _rail_button(t[1], t[2])
@@ -76,13 +80,10 @@ func _ready() -> void:
 	panel.name = "ContentPanel"
 	panel.add_theme_stylebox_override("panel", UiKit.box(Color(0.02, 0.04, 0.08, 0.82), Color(UiKit.ACCENT, 0.25), 8, 1, 18))
 	add_child(panel)
-	_scroll = ScrollContainer.new()
-	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll = KineticScroll.new()
+	_scroll.is_active = func(): return not (world.star_map.visible or world.settings_panel.visible)
 	panel.add_child(_scroll)
-	_content = VBoxContainer.new()
-	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_content.add_theme_constant_override("separation", 12)
-	_scroll.add_child(_content)
+	_content = _scroll.content
 
 	GameState.credits_changed.connect(_on_credits)
 	resized.connect(_layout)
@@ -99,8 +100,8 @@ func _layout() -> void:
 	rail.position = Vector2(22, 130)
 	rail.size = Vector2(rail_w, 0)
 	var launch: Control = get_node("Launch")
-	launch.position = Vector2(22, h - 104)
-	launch.size = Vector2(rail_w, 82)
+	launch.position = Vector2(22, h - 96)
+	launch.size = Vector2(rail_w, 76)
 	var panel: Control = get_node("ContentPanel")
 	panel.position = Vector2(rail_w + 44, 130)
 	panel.size = Vector2(w - rail_w - 66, h - 152)
@@ -111,7 +112,7 @@ func _layout() -> void:
 func _rail_button(label: String, icon_name: String) -> Button:
 	var b := Button.new()
 	b.toggle_mode = true
-	b.custom_minimum_size = Vector2(250, 66)
+	b.custom_minimum_size = Vector2(250, 58)
 	b.text = ""
 	b.add_theme_stylebox_override("normal", UiKit.box(Color(0.04, 0.08, 0.14, 0.85), Color(UiKit.ACCENT, 0.2), 6))
 	b.add_theme_stylebox_override("hover", UiKit.box(Color(0.06, 0.12, 0.2, 0.9), Color(UiKit.ACCENT, 0.5), 6))
@@ -120,8 +121,8 @@ func _rail_button(label: String, icon_name: String) -> Button:
 	b.draw.connect(func():
 		var on := b.button_pressed
 		var col := Color(1, 1, 1) if on else Color(UiKit.TEXT_DIM, 0.9)
-		UiKit.icon(b, icon_name, Vector2(36, b.size.y * 0.5), 30, UiKit.ACCENT if on else col, 2.2)
-		b.draw_string(UiKit.display(700, 2), Vector2(68, b.size.y * 0.5 + 7), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, col)
+		UiKit.icon(b, icon_name, Vector2(36, b.size.y * 0.5), 28, UiKit.ACCENT if on else col, 2.2)
+		b.draw_string(UiKit.display(700, 2), Vector2(68, b.size.y * 0.5 + 7), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, col)
 		if on:
 			b.draw_rect(Rect2(Vector2(0, 8), Vector2(4, b.size.y - 16)), UiKit.ACCENT))
 	b.pressed.connect(func(): UiKit.pop(b))
@@ -130,8 +131,8 @@ func _rail_button(label: String, icon_name: String) -> Button:
 
 func _icon_button(icon_name: String) -> Button:
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(120, 58)
-	b.draw.connect(func(): UiKit.icon(b, icon_name, b.size * 0.5, 30, UiKit.ACCENT, 2.2))
+	b.custom_minimum_size = Vector2(120, 52)
+	b.draw.connect(func(): UiKit.icon(b, icon_name, b.size * 0.5, 28, UiKit.ACCENT, 2.2))
 	b.pressed.connect(func(): UiKit.pop(b))
 	return b
 
@@ -247,13 +248,21 @@ func _rebuild() -> void:
 	if _preview:
 		_preview = null
 	_scroll.scroll_vertical = 0
+	_build_tab()
+
+
+func _build_tab() -> void:
 	match _tab:
 		"missions":
 			_build_missions()
 		"market":
 			_build_market()
-		"shipyard":
-			_build_shipyard()
+		"hangar":
+			_build_hangar()
+		"outfit":
+			_build_outfit()
+		"workshop":
+			_build_workshop()
 		"services":
 			_build_services()
 
@@ -329,7 +338,7 @@ func _draw_header() -> void:
 	var bx := right - 300
 	h.draw_string(UiKit.display(600), Vector2(bx, 84), "HULL", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, UiKit.TEXT_DIM)
 	h.draw_rect(Rect2(bx + 46, 75, 90, 8), Color(1, 0.6, 0.25, 0.2))
-	h.draw_rect(Rect2(bx + 46, 75, 90 * GameState.hull / 100.0, 8), Color(1, 0.6, 0.25))
+	h.draw_rect(Rect2(bx + 46, 75, 90 * GameState.hull / GameState.max_hull(), 8), Color(1, 0.6, 0.25))
 	h.draw_string(UiKit.display(600), Vector2(bx + 150, 84), "JUMP", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, UiKit.TEXT_DIM)
 	for i in GameState.max_jump_charges():
 		var on := i < GameState.jump_charges
@@ -338,7 +347,7 @@ func _draw_header() -> void:
 			h.draw_circle(c, 6, UiKit.ACCENT)
 		else:
 			h.draw_arc(c, 6, 0, TAU, 16, Color(UiKit.ACCENT, 0.4), 1.5, true)
-	var cargo := "CARGO %d / %d" % [GameState.cargo_used(), GameState.cargo_capacity()]
+	var cargo := "CARGO %d / %d   ·   %s" % [GameState.cargo_used(), GameState.cargo_capacity(), Items.SHIPS[GameState.ship]["name"].to_upper()]
 	h.draw_string(UiKit.display(600), Vector2(bx, 104), cargo, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, UiKit.TEXT_DIM)
 
 	# money popups float up from the counter
@@ -418,10 +427,15 @@ func _build_missions() -> void:
 		var body: String = m["desc"]
 		if hunt and state == "active":
 			body += "  Raiders left: %d." % m["left"]
+		var tracked: bool = GameState.destination.get("type", "") == "mission" and int(GameState.destination["id"]) == m["id"]
+		if tracked and state == "active":
+			title = title.replace("[ACTIVE]", "[TRACKED]")
 		var v := _text_block(h, title, body)
 		v.add_child(_label("REWARD  %s CR" % _fmt(m["reward"]), 17, UiKit.GOLD, UiKit.display(700)))
 		if state == "offered":
 			_btn(h, "ACCEPT", _do_accept.bind(m, col))
+		elif state == "active" or state == "done":
+			_btn(h, "TRACKING" if tracked else "TRACK", _do_track.bind(m), tracked, 150)
 
 
 func _build_market() -> void:
@@ -486,6 +500,52 @@ func _build_market() -> void:
 		_btn(h, "MAX", func(b): _buy(b, id, 999), false, 92)
 		_btn(h, "SELL ALL", func(b): _sell(b, id), held == 0, 130)
 
+	# salvage parts: some stations sell them, every station buys them
+	var sold_parts: Array = Galaxy.station(station.station_id).get("parts", [])
+	_content.add_child(_label("SALVAGE PARTS", 18, UiKit.ACCENT, UiKit.display(700, 2)))
+	for pid in Items.PARTS:
+		var pinfo: Dictionary = Items.PARTS[pid]
+		var have: int = GameState.parts.get(pid, 0)
+		if not (pid in sold_parts) and have == 0:
+			continue
+		var prow := _card(pinfo["color"])
+		var ph: HBoxContainer = prow[1]
+		var pv := VBoxContainer.new()
+		pv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pv.add_theme_constant_override("separation", 2)
+		pv.add_child(_label(pinfo["name"].to_upper(), 18, Color(1, 1, 1), UiKit.display(700)))
+		var line := "In locker: %d     Sells for %d cr" % [have, int(pinfo["price"] * 0.6)]
+		if pid in sold_parts:
+			line = "%s CR / unit     " % _fmt(GameState.part_price(station.station_id, pid)) + line
+		pv.add_child(_label(line, 16, UiKit.GOLD, UiKit.body(600)))
+		ph.add_child(pv)
+		if pid in sold_parts:
+			_btn(ph, "BUY 1", func(b): _buy_part(b, pid, 1), false, 104)
+			_btn(ph, "BUY 5", func(b): _buy_part(b, pid, 5), false, 104)
+		_btn(ph, "SELL 1", func(b): _sell_part(b, pid), have == 0, 110)
+
+
+func _buy_part(b: Control, pid: String, n: int) -> void:
+	var before := GameState.credits
+	if GameState.buy_part(station.station_id, pid, n) <= 0:
+		_deny(b)
+		return
+	world.sfx.play("ui_buy", -4.0, 0.9)
+	_money(GameState.credits - before)
+	_sparkle(b, Items.PARTS[pid]["color"])
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _sell_part(b: Control, pid: String) -> void:
+	var v := GameState.sell_part(pid, 1)
+	if v <= 0:
+		_deny(b)
+		return
+	world.sfx.play("ui_buy", -3.0, 1.12)
+	_money(v)
+	_sparkle(b, UiKit.GOLD)
+	_rebuild_keep_scroll.call_deferred()
+
 
 func _buy(b: Control, id: String, n: int) -> void:
 	var before := GameState.credits
@@ -497,7 +557,7 @@ func _buy(b: Control, id: String, n: int) -> void:
 	world.sfx.play("ui_buy", -4.0, 0.9)
 	_money(GameState.credits - before)
 	_sparkle(b, Galaxy.COMMODITIES[id]["color"])
-	_rebuild_keep_scroll()
+	_rebuild_keep_scroll.call_deferred()
 
 
 func _sell(b: Control, id: String) -> void:
@@ -508,7 +568,7 @@ func _sell(b: Control, id: String) -> void:
 	world.sfx.play("ui_buy", -2.0, 1.12)
 	_money(total)
 	_sparkle(b, UiKit.GOLD)
-	_rebuild_keep_scroll()
+	_rebuild_keep_scroll.call_deferred()
 
 
 func _rebuild_keep_scroll() -> void:
@@ -517,13 +577,8 @@ func _rebuild_keep_scroll() -> void:
 	for c in _content.get_children():
 		_content.remove_child(c)
 		c.queue_free()
-	match _tab:
-		"market":
-			_build_market()
-		"shipyard":
-			_build_shipyard()
-		"services":
-			_build_services()
+	_preview_ship = null
+	_build_tab()
 	await get_tree().process_frame
 	for c in _content.get_children():
 		c.modulate.a = 1.0
@@ -531,26 +586,25 @@ func _rebuild_keep_scroll() -> void:
 	_scroll.scroll_vertical = sc
 
 
-func _build_shipyard() -> void:
-	_heading("SHIPYARD", "Every upgrade is permanent. No shortcuts, just credits earned the hard way.")
-	# rotating ship preview + stats
-	var c := _card(UiKit.ACCENT)
-	var h: HBoxContainer = c[1]
+# --- hangar ---------------------------------------------------------------------
+
+func _preview_box(ship_id: String, w := 340, h := 200) -> SubViewportContainer:
 	var svc := SubViewportContainer.new()
-	svc.custom_minimum_size = Vector2(320, 190)
+	svc.custom_minimum_size = Vector2(w, h)
 	svc.stretch = true
+	svc.mouse_filter = Control.MOUSE_FILTER_PASS
 	var vp := SubViewport.new()
-	vp.size = Vector2i(320, 190)
+	vp.size = Vector2i(w, h)
 	vp.transparent_bg = true
 	vp.own_world_3d = true
 	svc.add_child(vp)
+	var sz := Models.ship_size(ship_id)
 	var cam := Camera3D.new()
-	cam.position = Vector3(0, 4.5, 13)
 	cam.fov = 40
 	vp.add_child(cam)
-	cam.look_at_from_position(cam.position, Vector3(0, 0, 0.5), Vector3.UP)
+	cam.look_at_from_position(Vector3(0, 4.5, 13) * sz, Vector3(0, 0, 0.5), Vector3.UP)
 	var ship := MeshInstance3D.new()
-	ship.mesh = Models.player_ship()
+	ship.mesh = Models.ship(ship_id)
 	vp.add_child(ship)
 	_preview_ship = ship
 	var key := DirectionalLight3D.new()
@@ -571,42 +625,368 @@ func _build_shipyard() -> void:
 	var we := WorldEnvironment.new()
 	we.environment = penv
 	vp.add_child(we)
-	h.add_child(svc)
 	_preview = vp
+	return svc
+
+
+func _stat_row(parent: Control, label: String, value: String, delta := 0.0) -> void:
+	var r := HBoxContainer.new()
+	var l := _label(label, 14, UiKit.TEXT_DIM, UiKit.display(600))
+	l.custom_minimum_size = Vector2(130, 0)
+	r.add_child(l)
+	r.add_child(_label(value, 17, UiKit.ACCENT, UiKit.display(700)))
+	if absf(delta) > 0.01:
+		r.add_child(_label(("  +%s" if delta > 0 else "  %s") % str(int(delta)), 15, UiKit.GOOD if delta > 0 else UiKit.BAD, UiKit.display(700)))
+	parent.add_child(r)
+
+
+func _slots_text(info: Dictionary) -> String:
+	var sl: Dictionary = info["slots"]
+	return "%d primary · %d secondary · %d utility" % [sl["primary"], sl["secondary"], sl["utility"]]
+
+
+## Two-tap confirm for big purchases. Returns true when the second tap lands.
+func _confirmed(b: Button, key: String, text: String) -> bool:
+	var now := Time.get_ticks_msec()
+	if _confirm.get(key, 0) > now:
+		_confirm.erase(key)
+		return true
+	_confirm[key] = now + 3000
+	b.text = text
+	world.sfx.ui("tab")
+	return false
+
+
+func _build_hangar() -> void:
+	var stock: Array = Galaxy.station(station.station_id).get("ships", [])
+	_heading("HANGAR", "Trade in your ship for a new hull. Your gear moves over where it fits; the rest goes to your locker.")
+	if _inspect == "" or not (_inspect in stock or _inspect == GameState.ship):
+		_inspect = GameState.ship
+	var cur: Dictionary = Items.SHIPS[GameState.ship]
+	var ins: Dictionary = Items.SHIPS[_inspect]
+	var c := _card(station.accent)
+	var h: HBoxContainer = c[1]
+	h.add_child(_preview_box(_inspect))
 	var stats := VBoxContainer.new()
 	stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stats.add_child(_label("STARLANE MK-I INTERCEPTOR", 18, Color(1, 1, 1), UiKit.display(800, 2)))
-	for s in [["TOP SPEED", "%d m/s" % int(GameState.top_speed())], ["SHIELD", "%d" % int(GameState.max_shield())],
-			["LASER DMG", "%.1f" % GameState.laser_damage()], ["CARGO", "%d units" % GameState.cargo_capacity()],
-			["JUMP CHARGES", "%d" % GameState.max_jump_charges()]]:
-		var r := HBoxContainer.new()
-		var l := _label(s[0], 14, UiKit.TEXT_DIM, UiKit.display(600))
-		l.custom_minimum_size = Vector2(150, 0)
-		r.add_child(l)
-		r.add_child(_label(s[1], 17, UiKit.ACCENT, UiKit.display(700)))
-		stats.add_child(r)
+	stats.add_theme_constant_override("separation", 3)
+	var mine := _inspect == GameState.ship
+	stats.add_child(_label(ins["name"].to_upper() + ("   (YOUR SHIP)" if mine else ""), 20, Color(1, 1, 1), UiKit.display(800, 2)))
+	stats.add_child(_label(ins["role"], 15, station.accent, UiKit.display(600)))
+	stats.add_child(_label(ins["desc"], 15, UiKit.TEXT_DIM, UiKit.body(500), true))
+	_stat_row(stats, "HULL", "%d" % ins["hull"], 0.0 if mine else float(ins["hull"] - cur["hull"]))
+	_stat_row(stats, "TOP SPEED", "%d m/s" % ins["speed"], 0.0 if mine else float(ins["speed"] - cur["speed"]))
+	_stat_row(stats, "CARGO", "%d" % ins["cargo"], 0.0 if mine else float(ins["cargo"] - cur["cargo"]))
+	_stat_row(stats, "HANDLING", "%d%%" % int(ins["turn"] * 100), 0.0 if mine else (ins["turn"] - cur["turn"]) * 100.0)
+	stats.add_child(_label(_slots_text(ins), 15, UiKit.GOLD, UiKit.body(600)))
 	h.add_child(stats)
 
-	for id in GameState.UPGRADES:
-		var info: Dictionary = GameState.UPGRADES[id]
-		var lvl: int = GameState.upgrades[id]
-		var maxed: bool = lvl >= info["max"]
-		var cost: int = 0 if maxed else info["cost"][lvl]
-		var card := _card(UiKit.ACCENT)
+	if stock.is_empty():
+		var c2 := _card(UiKit.TEXT_DIM)
+		var yards := []
+		for sid in Galaxy.SYSTEMS:
+			for st in Galaxy.SYSTEMS[sid]["stations"]:
+				if st.has("ships"):
+					yards.append("%s (%s)" % [st["name"], Galaxy.SYSTEMS[sid]["name"]])
+		_text_block(c2[1], "NO SHIPYARD HERE", "Ships are sold at: " + ", ".join(yards) + ".")
+		return
+	_content.add_child(_label("SHIPS FOR SALE", 18, UiKit.ACCENT, UiKit.display(700, 2)))
+	for id in stock:
+		var info: Dictionary = Items.SHIPS[id]
+		var card := _card(UiKit.GOLD if id == GameState.ship else station.accent)
 		var ch: HBoxContainer = card[1]
-		var v := _text_block(ch, info["name"].to_upper(), info["desc"])
-		var pips := Control.new()
-		pips.custom_minimum_size = Vector2(0, 16)
-		var mx: int = info["max"]
-		pips.draw.connect(func():
-			for i in mx:
-				var r := Rect2(Vector2(i * 46, 2), Vector2(40, 10))
-				pips.draw_rect(r, UiKit.ACCENT if i < lvl else Color(UiKit.ACCENT, 0.15))
-				if i < lvl:
-					pips.draw_rect(r.grow(2), Color(UiKit.ACCENT, 0.15)))
-		v.add_child(pips)
-		var label := "MAXED" if maxed else "%s CR" % _fmt(cost)
-		_btn(ch, label, _do_upgrade.bind(id), maxed, 170)
+		var ic := Control.new()
+		ic.custom_minimum_size = Vector2(48, 48)
+		ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ic.draw.connect(func(): UiKit.icon(ic, "ship", Vector2(24, 24), 40, station.accent, 2.2))
+		ch.add_child(ic)
+		var body := "Hull %d · %d m/s · Cargo %d · %s" % [info["hull"], info["speed"], info["cargo"], _slots_text(info)]
+		var v := _text_block(ch, "%s  ·  %s" % [info["name"].to_upper(), info["role"]], body)
+		if id == GameState.ship:
+			v.add_child(_label("CURRENT SHIP", 16, UiKit.GOLD, UiKit.display(700)))
+			_btn(ch, "INSPECT", _do_inspect.bind(id), id == _inspect, 130)
+			continue
+		var net := GameState.ship_cost(id)
+		v.add_child(_label("%s CR   (trade-in %s cr)" % [_fmt(info["price"]), _fmt(Items.ship_trade_in(GameState.ship))], 16, UiKit.GOLD, UiKit.display(700)))
+		_btn(ch, "INSPECT", _do_inspect.bind(id), id == _inspect, 130)
+		_btn(ch, ("BUY  %s" % _fmt(net)) if net > 0 else ("SWAP  +%s" % _fmt(-net)), _do_buy_ship.bind(id), false, 190)
+
+
+func _do_inspect(_b: Control, id: String) -> void:
+	_inspect = id
+	world.sfx.ui("tab")
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_buy_ship(b: Button, id: String) -> void:
+	if GameState.credits < GameState.ship_cost(id):
+		_deny(b)
+		GameState.message.emit("Not enough credits", UiKit.BAD)
+		return
+	if not _confirmed(b, "ship_" + id, "TAP TO CONFIRM"):
+		return
+	var before := GameState.credits
+	if GameState.buy_ship(id):
+		world.player.refresh_ship()
+		world.sfx.ui("upgrade")
+		world.sfx.play("dock_clamp", -6.0, 0.8)
+		_money(GameState.credits - before)
+		_sparkle(b, UiKit.GOLD)
+		_inspect = id
+		GameState.message.emit("Welcome aboard your new %s!" % Items.SHIPS[id]["name"], UiKit.GOOD)
+		GameState.save_game()
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+# --- outfit ----------------------------------------------------------------------
+
+func _gear_icon(slot: String) -> String:
+	return {"primary": "target", "secondary": "launch", "utility": "shield"}[slot]
+
+
+func _gear_color(gear_id: String) -> Color:
+	var g: Dictionary = Items.GEAR[gear_id]
+	if g.get("unique", false):
+		return Color(0.85, 0.6, 1.0)
+	return {"primary": Color(1.0, 0.55, 0.45), "secondary": Color(1.0, 0.75, 0.35), "utility": UiKit.ACCENT}[g["slot"]]
+
+
+func _gear_card(gear_id: String, accent: Color) -> HBoxContainer:
+	var card := _card(accent)
+	var ch: HBoxContainer = card[1]
+	var g: Dictionary = Items.GEAR[gear_id]
+	var ic := Control.new()
+	ic.custom_minimum_size = Vector2(44, 44)
+	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var slot: String = g["slot"]
+	ic.draw.connect(func(): UiKit.icon(ic, _gear_icon(slot), Vector2(22, 22), 36, accent, 2.2))
+	ch.add_child(ic)
+	var title: String = g["name"].to_upper() + ("   ·  UNIQUE" if g.get("unique", false) else "")
+	var body: String = Items.gear_stats(gear_id)
+	if g["slot"] != "utility":
+		body += "\n" + g["desc"]
+	_text_block(ch, title, body)
+	return ch
+
+
+func _build_outfit() -> void:
+	_heading("OUTFIT", "Install weapons and systems. Removed gear goes to your locker and travels with you.")
+	var c := _card(UiKit.ACCENT)
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(_label("%s LOADOUT" % Items.SHIPS[GameState.ship]["name"].to_upper(), 18, Color(1, 1, 1), UiKit.display(800, 2)))
+	v.add_child(_label("Firepower %d DPS   ·   Shield %d   ·   Hull %d   ·   Speed %d m/s   ·   Cargo %d   ·   Jumps %d" % [
+		int(GameState.firepower()), int(GameState.max_shield()), int(GameState.max_hull()), int(GameState.top_speed()),
+		GameState.cargo_capacity(), GameState.max_jump_charges()], 16, UiKit.ACCENT, UiKit.body(600), true))
+	c[1].add_child(v)
+
+	for slot in ["primary", "secondary", "utility"]:
+		var arr: Array = GameState.equip[slot]
+		_content.add_child(_label("%s  (%d / %d)" % [Items.slot_label(slot), GameState.installed(slot).size(), arr.size()], 17, UiKit.ACCENT, UiKit.display(700, 2)))
+		for i in arr.size():
+			if arr[i] == "":
+				var e := _card(Color(1, 1, 1, 0.25))
+				_text_block(e[1], "EMPTY SLOT", "Install something from your locker or buy it below.", UiKit.TEXT_DIM)
+				continue
+			var ch := _gear_card(arr[i], _gear_color(arr[i]))
+			_btn(ch, "REMOVE", _do_uninstall.bind(slot, i), false, 130)
+
+	_content.add_child(_label("LOCKER  (%d)" % GameState.storage.size(), 17, UiKit.ACCENT, UiKit.display(700, 2)))
+	if GameState.storage.is_empty():
+		var e2 := _card(Color(1, 1, 1, 0.2))
+		_text_block(e2[1], "Locker is empty", "Crafted items and removed gear end up here.", UiKit.TEXT_DIM)
+	for i in GameState.storage.size():
+		var gid: String = GameState.storage[i]
+		var ch2 := _gear_card(gid, _gear_color(gid))
+		_btn(ch2, "INSTALL", _do_install.bind(i), GameState.free_slot(Items.GEAR[gid]["slot"]) < 0, 130)
+		_btn(ch2, "SELL %s" % _fmt(Items.sell_value(gid)), _do_sell_gear.bind(i), false, 150)
+
+	var sold: Array = Galaxy.station(station.station_id).get("gear", [])
+	_content.add_child(_label("FOR SALE AT %s" % station.display_name.to_upper(), 17, UiKit.ACCENT, UiKit.display(700, 2)))
+	if sold.is_empty():
+		var e3 := _card(Color(1, 1, 1, 0.2))
+		_text_block(e3[1], "No outfitter here", "Try a trade hub, fortress or shipyard.", UiKit.TEXT_DIM)
+	for gid in sold:
+		var g: Dictionary = Items.GEAR[gid]
+		var ch3 := _gear_card(gid, _gear_color(gid))
+		_btn(ch3, "BUY  %s" % _fmt(g["price"]), _do_buy_gear.bind(gid), false, 180)
+	# ammo for installed launchers
+	var kinds := {}
+	for gid in GameState.installed("secondary"):
+		kinds[Items.GEAR[gid]["ammo"]] = true
+	for kind in kinds:
+		var a: Dictionary = Items.AMMO[kind]
+		var ca := _card(Color(1.0, 0.75, 0.35))
+		_text_block(ca[1], "%s  ·  %d IN RACKS" % [a["name"].to_upper(), GameState.ammo.get(kind, 0)], "%d cr each" % a["price"])
+		_btn(ca[1], "BUY 5", _do_buy_ammo.bind(kind, 5), false, 110)
+		_btn(ca[1], "BUY 20", _do_buy_ammo.bind(kind, 20), false, 120)
+
+
+func _do_uninstall(b: Control, slot: String, i: int) -> void:
+	if GameState.uninstall(slot, i):
+		world.sfx.play("equip", -4.0, 0.85)
+		_sparkle(b, UiKit.TEXT_DIM)
+		world.player.shield = minf(world.player.shield, GameState.max_shield())
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_install(b: Control, i: int) -> void:
+	if GameState.install(i):
+		world.sfx.play("equip", -3.0)
+		_sparkle(b, UiKit.ACCENT)
+		world.player.shield = GameState.max_shield()
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+		GameState.message.emit("No free slot of that type. Remove something first.", UiKit.BAD)
+
+
+func _do_sell_gear(b: Button, i: int) -> void:
+	if not _confirmed(b, "sell_%d_%s" % [i, GameState.storage[i]], "CONFIRM SELL"):
+		return
+	var v := GameState.sell_stored(i)
+	if v > 0:
+		world.sfx.play("ui_buy", -2.0, 1.12)
+		_money(v)
+		_sparkle(b, UiKit.GOLD)
+		_rebuild_keep_scroll.call_deferred()
+
+
+func _do_buy_gear(b: Control, gid: String) -> void:
+	var before := GameState.credits
+	var r := GameState.buy_gear(gid)
+	if r == "":
+		_deny(b)
+		GameState.message.emit("Not enough credits", UiKit.BAD)
+		return
+	world.sfx.play("equip" if r == "installed" else "ui_buy", -3.0)
+	world.sfx.ui("upgrade")
+	_money(GameState.credits - before)
+	_sparkle(b, _gear_color(gid))
+	world.player.shield = GameState.max_shield()
+	GameState.message.emit("%s %s" % [Items.GEAR[gid]["name"], "installed" if r == "installed" else "sent to your locker"], UiKit.GOOD)
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_buy_ammo(b: Control, kind: String, n: int) -> void:
+	var before := GameState.credits
+	if GameState.buy_ammo(kind, n) > 0:
+		world.sfx.play("ui_buy", -4.0, 0.95)
+		_money(GameState.credits - before)
+		_sparkle(b, Color(1.0, 0.75, 0.35))
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+# --- workshop ------------------------------------------------------------------------
+
+func _chip(parent: Control, text: String, col: Color, filled := false) -> void:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", UiKit.box(Color(col, 0.22 if filled else 0.08), Color(col, 0.7), 12, 1, 8))
+	p.add_child(_label(text, 14, col.lerp(Color(1, 1, 1), 0.35), UiKit.display(700)))
+	parent.add_child(p)
+
+
+func _build_workshop() -> void:
+	_heading("WORKSHOP", "Assemble blueprints from salvage. Wrecked raiders, salvage drifts in asteroid fields and some markets supply parts.")
+	var c := _card(Color(0.85, 0.6, 1.0))
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(_label("PARTS LOCKER", 17, Color(1, 1, 1), UiKit.display(800, 2)))
+	var chips := HFlowContainer.new()
+	chips.add_theme_constant_override("h_separation", 8)
+	chips.add_theme_constant_override("v_separation", 8)
+	for pid in Items.PARTS:
+		_chip(chips, "%s  %d" % [Items.PARTS[pid]["name"].to_upper(), GameState.parts.get(pid, 0)], Items.PARTS[pid]["color"], GameState.parts.get(pid, 0) > 0)
+	v.add_child(chips)
+	c[1].add_child(v)
+
+	var sold: Array = Galaxy.station(station.station_id).get("blueprints", [])
+	for bp in sold:
+		if GameState.blueprints.has(bp):
+			continue
+		var cb := _card(Color(0.85, 0.6, 1.0))
+		var ic := Control.new()
+		ic.custom_minimum_size = Vector2(44, 44)
+		ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ic.draw.connect(func(): UiKit.icon(ic, "blueprint", Vector2(22, 22), 36, Color(0.85, 0.6, 1.0), 2.0))
+		cb[1].add_child(ic)
+		_text_block(cb[1], "BLUEPRINT DATA: %s" % Items.blueprint_name(bp).to_upper(), "Decrypted schematics for sale. Unlocks a unique item you can assemble here.")
+		_btn(cb[1], "%s CR" % _fmt(Items.BLUEPRINTS[bp]["price"]), _do_buy_bp.bind(bp), false, 150)
+
+	_content.add_child(_label("BLUEPRINTS", 17, UiKit.ACCENT, UiKit.display(700, 2)))
+	var unknown := 0
+	for bp in Items.BLUEPRINTS:
+		if not GameState.blueprints.has(bp):
+			unknown += 1
+			continue
+		var info: Dictionary = Items.BLUEPRINTS[bp]
+		var mk: String = info["makes"]
+		var col := Color(0.85, 0.6, 1.0) if not mk.begins_with("ammo:") and Items.GEAR[mk].get("unique", false) else UiKit.ACCENT
+		var card := _card(col)
+		var ch: HBoxContainer = card[1]
+		var ic2 := Control.new()
+		ic2.custom_minimum_size = Vector2(44, 44)
+		ic2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ic2.draw.connect(func(): UiKit.icon(ic2, "blueprint", Vector2(22, 22), 36, col, 2.0))
+		ch.add_child(ic2)
+		var desc := "Ammunition for your launchers." if mk.begins_with("ammo:") else Items.gear_stats(mk)
+		var vb := _text_block(ch, Items.blueprint_name(bp).to_upper(), desc)
+		var recipe := HFlowContainer.new()
+		recipe.add_theme_constant_override("h_separation", 6)
+		recipe.add_theme_constant_override("v_separation", 6)
+		for pid in info["parts"]:
+			var need: int = info["parts"][pid]
+			var have: int = GameState.parts.get(pid, 0)
+			_chip(recipe, "%s %d/%d" % [Items.PARTS[pid]["name"], have, need], UiKit.GOOD if have >= need else UiKit.BAD, have >= need)
+		if info["fee"] > 0:
+			_chip(recipe, "FEE %s CR" % _fmt(info["fee"]), UiKit.GOLD if GameState.credits >= info["fee"] else UiKit.BAD)
+		vb.add_child(recipe)
+		_btn(ch, "ASSEMBLE", _do_craft.bind(bp), not GameState.can_craft(bp), 160)
+	if unknown > 0:
+		var cu := _card(Color(1, 1, 1, 0.25))
+		_text_block(cu[1], "%d ENCRYPTED BLUEPRINT%s" % [unknown, "" if unknown == 1 else "S"],
+			"Unique designs are recovered from elite raiders or bought at research stations.", UiKit.TEXT_DIM)
+
+
+func _do_craft(b: Control, bp: String) -> void:
+	var before := GameState.credits
+	var made := GameState.craft(bp)
+	if made == "":
+		_deny(b)
+		return
+	world.sfx.play("craft", -2.0)
+	_money(GameState.credits - before)
+	_sparkle(b, Color(0.85, 0.6, 1.0))
+	_sparkle(b, UiKit.GOLD)
+	_popup("ASSEMBLED", Color(0.85, 0.6, 1.0))
+	GameState.message.emit("Assembled: %s%s" % [made, "" if Items.BLUEPRINTS[bp]["makes"].begins_with("ammo:") else " (in your locker)"], Color(0.85, 0.6, 1.0))
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_buy_bp(b: Control, bp: String) -> void:
+	var before := GameState.credits
+	if GameState.buy_blueprint(bp):
+		world.sfx.ui("upgrade")
+		_money(GameState.credits - before)
+		_sparkle(b, Color(0.85, 0.6, 1.0))
+		GameState.message.emit("Blueprint unlocked: " + Items.blueprint_name(bp), Color(0.85, 0.6, 1.0))
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_track(b: Control, m: Dictionary) -> void:
+	GameState.set_destination("mission", m["id"])
+	world.sfx.ui("tab")
+	_sparkle(b, UiKit.GOLD)
+	GameState.message.emit("Tracking: " + m["title"], UiKit.GOLD)
+	_rebuild_keep_scroll.call_deferred()
 
 
 func _do_accept(b: Control, m: Dictionary, col: Color) -> void:
@@ -614,19 +994,7 @@ func _do_accept(b: Control, m: Dictionary, col: Color) -> void:
 	world.sfx.ui("upgrade")
 	_sparkle(b, col)
 	GameState.message.emit("Contract accepted: " + m["title"], UiKit.GOOD)
-	_rebuild()
-
-
-func _do_upgrade(b: Control, id: String) -> void:
-	var before := GameState.credits
-	if GameState.upgrade(id):
-		world.sfx.ui("upgrade")
-		_money(GameState.credits - before)
-		_sparkle(b, UiKit.ACCENT)
-		GameState.message.emit("%s upgraded to Mk %d" % [GameState.UPGRADES[id]["name"], GameState.upgrades[id]], UiKit.GOOD)
-		_rebuild_keep_scroll()
-	else:
-		_deny(b)
+	_rebuild.call_deferred()
 
 
 func _do_repair(b: Control) -> void:
@@ -635,7 +1003,7 @@ func _do_repair(b: Control) -> void:
 		world.sfx.play("dock_clamp", -6.0, 1.3)
 		_money(GameState.credits - before)
 		_sparkle(b, Color(1, 0.6, 0.25))
-		_rebuild_keep_scroll()
+		_rebuild_keep_scroll.call_deferred()
 	else:
 		_deny(b)
 
@@ -646,17 +1014,17 @@ func _do_refuel(b: Control) -> void:
 		world.sfx.ui("upgrade")
 		_money(GameState.credits - before)
 		_sparkle(b, UiKit.ACCENT)
-		_rebuild_keep_scroll()
+		_rebuild_keep_scroll.call_deferred()
 	else:
 		_deny(b)
 
 
 func _build_services() -> void:
-	_heading("SERVICES", "Repairs and jump capacitor refuelling.")
+	_heading("SERVICES", "Repairs, jump capacitor refuelling and munitions.")
 	var c := _card(Color(1, 0.6, 0.25))
 	var h: HBoxContainer = c[1]
 	var cost := GameState.repair_cost()
-	_text_block(h, "HULL INTEGRITY  %d%%" % int(GameState.hull), "Full repair: %s cr" % _fmt(cost) if cost > 0 else "Your ship is in perfect shape.")
+	_text_block(h, "HULL  %d / %d" % [int(GameState.hull), int(GameState.max_hull())], "Full repair: %s cr" % _fmt(cost) if cost > 0 else "Your ship is in perfect shape.")
 	_btn(h, "REPAIR", _do_repair, cost <= 0, 170)
 
 	var c2 := _card(UiKit.ACCENT)
@@ -665,6 +1033,16 @@ func _build_services() -> void:
 	_text_block(h2, "JUMP CAPACITORS  %d / %d" % [GameState.jump_charges, GameState.max_jump_charges()],
 		"Each stargate hop uses one charge. Refill: %d cr per charge." % GameState.JUMP_CELL_PRICE)
 	_btn(h2, "REFUEL" if missing > 0 else "FULL", _do_refuel, missing <= 0, 170)
+
+	var kinds := {}
+	for gid in GameState.installed("secondary"):
+		kinds[Items.GEAR[gid]["ammo"]] = true
+	for kind in kinds:
+		var a: Dictionary = Items.AMMO[kind]
+		var ca := _card(Color(1.0, 0.75, 0.35))
+		_text_block(ca[1], "%s  ·  %d IN RACKS" % [a["name"].to_upper(), GameState.ammo.get(kind, 0)], "%d cr each" % a["price"])
+		_btn(ca[1], "BUY 5", _do_buy_ammo.bind(kind, 5), false, 110)
+		_btn(ca[1], "BUY 20", _do_buy_ammo.bind(kind, 20), false, 120)
 
 	var c3 := _card(UiKit.TEXT_DIM)
 	var v3 := _text_block(c3[1], "PILOT RECORD", "")

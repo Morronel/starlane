@@ -5,14 +5,16 @@ The loop is short: dock, trade or take a contract, ride the space lane, fight ra
 
 ## What's in the prototype
 
-- **Four star systems** (Tessaly, Corvan Reach, Nyx Hollow and Elysia Drift), each with two stations, its own sky, sun, planet and threat level.
-- **Stargates** with limited fast travel. Every hop costs a jump charge. You start with 2 charges, can raise the cap with Jump Capacitors, and refill at stations. The jump computer plans routes of several hops.
-- **Star map** with a top-down SYSTEM view (lanes, exits, gates, raiders, your ship) and a GALAXY view (gate network, threat, contracts, route preview).
-- **Space lanes**: wide glowing tubes. Tap ENTER LANE near any exit, ride at 400–1200 m/s, steer around freighter traffic, and pick your exit: stations, the beacon or the stargates.
-- **Arcade 6DOF flight** with 3rd-person or cockpit camera and direct or inverted steering (see Settings).
-- **Combat**: raiders with attack runs and an elite in mission waves. Aim assist with a lead marker. **Double-tap FIRE** to toggle auto-attack, which fires whenever a target is in the aim cone.
-- **Station screen**: contracts (raider hunts and multi-jump courier runs), a market of five commodities with best-market hints, a shipyard with a live ship preview and five upgrade tracks, and services (repairs, jump refuelling). Animated credit counter, popups, sparkles and sounds.
-- **Progress is saved** automatically on dock, launch and jump.
+- **Six star systems with eighteen stations.** Each system is a ~50 km stretch of space around one long, winding space lane, with three stations, a beacon, a salvage field and two or three stargates. Every system has its own sky, sun, planet and threat level.
+- **Space lanes** are wide glowing tubes you can join anywhere. Fly into one roughly along it and you merge automatically, or tap ENTER LANE when you are close. You ride at up to 1600 m/s (2300 with boost), dodge freighter traffic and drop out wherever you like.
+- **Destinations and autopilot.** Pick a station or a contract on the star map (or TRACK a contract at a station) and a marker shows where to go. AUTOPILOT flies there for you: it heads for the lane, rides it a bit slower than flat out, drops out, docks, and even jumps through stargates. Boost works without breaking it. Any stick input takes back control.
+- **Stargates** with limited fast travel. Each hop costs a jump charge. Refill at stations and carry more with Jump Capacitors.
+- **Hangar:** six ships, from the Sparrow interceptor to the Mule hauler and the Seraph. Trade in your current ship (60% back). Gear moves over where it fits.
+- **Outfit:** primary weapons (pulse lasers, ion repeater, scatter blaster, plasma lance, rail driver), secondary launchers with homing missiles and torpedoes, and utility gear (shields, armor, engines, cargo pods, tractor beam, nano-repair, afterburner, targeting computer, jump capacitors). Each ship has its own slot layout, and every station stocks different gear.
+- **Workshop:** salvage parts (scrap, circuits, plasma coils, lattice crystal, void shards) drop from raiders and drift in asteroid fields. Blueprints turn them into gear, including unique items like the Hellfire Repeater, Aegis Lattice and Ghost Drive. Rare blueprints drop from elite raiders or are sold at research stations.
+- **Combat:** raiders with attack runs and elites in mission waves, aim assist with a lead marker, homing missiles, and auto-attack (double-tap FIRE). Tense combat music kicks in while you're fighting.
+- **Station screen** with drag-anywhere kinetic scrolling (a drag never presses the button under your finger), animated cards, rolling credits, popups and sparkles.
+- **Progress is saved** automatically on dock, launch and jump. Saves from 0.2 carry over your credits, cargo, contracts and location.
 
 ## Controls
 
@@ -24,15 +26,17 @@ The loop is short: dock, trade or take a contract, ride the space lane, fight ra
 | Fire | FIRE | A or RT | Space, right mouse |
 | Boost | BOOST | B or LT | Shift |
 | Lane / dock / exit / jump | Context button | Y | T or Enter |
+| Missiles | MSL | Right stick click | C or X |
 | Auto-attack | Double-tap FIRE | X | G |
+| Autopilot | AUTOPILOT button | Start | P |
 | Star map | MAP button | Back | M or Tab |
 
 ## Art and audio
 
-- Low-poly flat-shaded ships, stations, stargates and rocks are generated in code (`scripts/models.gd`, `scripts/mesh_builder.gd`).
+- Low-poly flat-shaded ships (six player hulls), stations, stargates, missiles, salvage canisters and rocks are generated in code (`scripts/models.gd`, `scripts/mesh_builder.gd`).
 - Each system bakes its own nebula panorama at startup (`shaders/nebula_pano.gdshader`). The stars, sun, planets and atmospheres are shaders.
 - Fonts: [Orbitron](https://fonts.google.com/specimen/Orbitron) and [Exo 2](https://fonts.google.com/specimen/Exo+2), under the SIL Open Font License (licenses in `assets/fonts/`).
-- All sound effects and both ambient music tracks are synthesized offline by `tools/make_audio.py` (numpy + scipy + ffmpeg). It uses FM bells, supersaw pads, filtered noise and convolution reverb. To regenerate them, run `python3 tools/make_audio.py`.
+- All sound effects and the three music tracks (flight, station and combat) are synthesized offline by `tools/make_audio.py` (numpy + scipy + ffmpeg). It uses FM bells, supersaw pads, filtered noise and convolution reverb. To regenerate them, run `python3 tools/make_audio.py`.
 
 ## Building
 
@@ -47,5 +51,5 @@ For release signing, set `GODOT_ANDROID_KEYSTORE_RELEASE_PATH`, `_USER` and `_PA
 
 ## Dev tools
 
-- `godot --headless -- --simtest` runs a scripted gameplay check: lane ride, auto-attack kills, docking payout, trade, stargate jump, refuel, respawn and save/load.
+- `godot --headless -- --simtest` runs a scripted gameplay check. It covers autopilot via the lane to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, an automatic lane merge, death and respawn, and save/load.
 - `godot -- --autotest=/some/dir` saves a set of screenshots from a scripted flight.

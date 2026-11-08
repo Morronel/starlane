@@ -135,6 +135,23 @@ static func icon(ci: CanvasItem, name: String, c: Vector2, s: float, col: Color,
 			ci.draw_line(c + Vector2(0, s * 0.4), c + Vector2(0, -s * 0.35), col, w * 1.4, true)
 			ci.draw_line(c + Vector2(-s * 0.25, -s * 0.1), c + Vector2(0, -s * 0.38), col, w * 1.4, true)
 			ci.draw_line(c + Vector2(s * 0.25, -s * 0.1), c + Vector2(0, -s * 0.38), col, w * 1.4, true)
+		"bolt":
+			var pts := PackedVector2Array([c + Vector2(s * 0.08, -s * 0.45), c + Vector2(-s * 0.22, s * 0.05), c + Vector2(s * 0.02, s * 0.05),
+				c + Vector2(-s * 0.08, s * 0.45), c + Vector2(s * 0.24, -s * 0.08), c + Vector2(0, -s * 0.08), c + Vector2(s * 0.08, -s * 0.45)])
+			ci.draw_polyline(pts, col, w, true)
+		"blueprint":
+			var r := Rect2(c - Vector2(s, s) * 0.38, Vector2(s, s) * 0.76)
+			ci.draw_rect(r, col, false, w)
+			for k in range(1, 3):
+				var x := r.position.x + r.size.x * k / 3.0
+				ci.draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), Color(col, 0.4), 1.0)
+				var y := r.position.y + r.size.y * k / 3.0
+				ci.draw_line(Vector2(r.position.x, y), Vector2(r.end.x, y), Color(col, 0.4), 1.0)
+			ci.draw_arc(c, s * 0.16, 0, TAU, 16, col, w, true)
+		"hangar":
+			ci.draw_polyline(PackedVector2Array([c + Vector2(-s * 0.45, s * 0.4), c + Vector2(-s * 0.45, -s * 0.1), c + Vector2(0, -s * 0.42),
+				c + Vector2(s * 0.45, -s * 0.1), c + Vector2(s * 0.45, s * 0.4)]), col, w, true)
+			ci.draw_polyline(PackedVector2Array([c + Vector2(0, -s * 0.12), c + Vector2(s * 0.2, s * 0.3), c + Vector2(0, s * 0.2), c + Vector2(-s * 0.2, s * 0.3), c + Vector2(0, -s * 0.12)]), col, w, true)
 		_:
 			ci.draw_circle(c, s * 0.2, col)
 

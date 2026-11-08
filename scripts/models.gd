@@ -48,6 +48,179 @@ static func player_ship() -> ArrayMesh:
 	return b.build(MeshBuilder.default_materials())
 
 
+## Any player-flyable hull by id (see Items.SHIPS).
+static func ship(id: String) -> ArrayMesh:
+	match id:
+		"wren":
+			return _wren()
+		"kestrel":
+			return _kestrel()
+		"mule":
+			return _mule()
+		"corsair":
+			return _corsair()
+		"seraph":
+			return _seraph()
+	return player_ship()
+
+
+## Rough size relative to the Sparrow (camera distance, collision).
+static func ship_size(id: String) -> float:
+	return {"sparrow": 1.0, "wren": 1.05, "kestrel": 1.1, "mule": 1.65, "corsair": 1.45, "seraph": 1.25}.get(id, 1.0)
+
+
+## Gun muzzle positions in ship space; weapons cycle through them.
+static func hardpoints(id: String) -> Array:
+	match id:
+		"wren":
+			return [Vector3(0, -0.4, -6.5)]
+		"kestrel":
+			return [Vector3(-2.6, 0, -3.5), Vector3(2.6, 0, -3.5), Vector3(0, -0.6, -6.0)]
+		"mule":
+			return [Vector3(-3.4, 1.2, -7.0), Vector3(3.4, 1.2, -7.0)]
+		"corsair":
+			return [Vector3(-3.8, 0.4, -6.4), Vector3(3.8, 0.4, -6.4), Vector3(-2.2, -0.6, -7.2), Vector3(2.2, -0.6, -7.2)]
+		"seraph":
+			return [Vector3(-3.2, 0, -4.4), Vector3(3.2, 0, -4.4), Vector3(-1.2, -0.3, -6.4), Vector3(1.2, -0.3, -6.4)]
+	return [Vector3(-1.6, 0, -3.0), Vector3(1.6, 0, -3.0)]
+
+
+static func _mirror(pts: Array) -> Array:
+	var out := []
+	for p in pts:
+		out.append(Vector2(-p.x, p.y))
+	return out
+
+
+static func _wren() -> ArrayMesh:
+	var b := MeshBuilder.new()
+	var body := Color(0.86, 0.82, 0.7)
+	var trim := Color(0.55, 0.42, 0.3)
+	b.loft("hull", [
+		Vector4(-8.0, 0.05, 0.05, 0.0),
+		Vector4(-5.0, 0.5, 0.42, 0.05),
+		Vector4(-1.5, 0.85, 0.7, 0.1),
+		Vector4(2.5, 0.95, 0.75, 0.1),
+		Vector4(4.6, 0.7, 0.6, 0.05),
+	], 8, body, trim)
+	b.loft("dim", [Vector4(-4.6, 0.05, 0.05, 0.45), Vector4(-3.0, 0.32, 0.3, 0.55), Vector4(-0.6, 0.36, 0.3, 0.6), Vector4(0.4, 0.05, 0.05, 0.5)], 6, Color(0.15, 0.4, 0.55))
+	var wing := [Vector2(0.8, -0.5), Vector2(3.8, 3.0), Vector2(3.9, 3.8), Vector2(0.8, 3.4)]
+	b.slab("hull", wing, -0.1, 0.14, body, trim)
+	b.slab("hull", _mirror(wing), -0.1, 0.14, body, trim)
+	b.slab("hull", [Vector2(0.0, 1.0), Vector2(0.0, 4.4), Vector2(0.02, 4.4)], 0.7, 0.1, trim)
+	b.box("hull", Vector3(0, 1.3, 3.6), Vector3(0.12, 1.4, 1.4), trim, Basis(Vector3.RIGHT, -0.5))
+	b.cyl("hull", Vector3(0, 0.05, 3.5), Vector3(0, 0.05, 5.4), 0.75, 0.85, 8, STEEL)
+	b.cyl("glow", Vector3(0, 0.05, 5.42), Vector3(0, 0.05, 5.5), 0.5, 0.5, 8, AMBER.darkened(0.2))
+	for sx in [-1.0, 1.0]:
+		b.box("glow", Vector3(2.2 * sx, 0.0, 1.8), Vector3(2.4, 0.04, 0.1), AMBER, Basis(Vector3.UP, -0.85 * sx))
+		b.cyl("hull", Vector3(3.85 * sx, -0.1, 1.2), Vector3(3.85 * sx, -0.1, 3.9), 0.12, 0.18, 5, STEEL)
+	return b.build(MeshBuilder.default_materials())
+
+
+static func _kestrel() -> ArrayMesh:
+	var b := MeshBuilder.new()
+	var body := Color(0.45, 0.49, 0.55)
+	var stripe := Color(0.75, 0.2, 0.15)
+	b.loft("hull", [
+		Vector4(-6.5, 0.05, 0.05, 0.0),
+		Vector4(-4.0, 0.7, 0.5, 0.0),
+		Vector4(-0.5, 1.1, 0.75, 0.1),
+		Vector4(2.8, 1.0, 0.7, 0.1),
+		Vector4(4.0, 0.7, 0.5, 0.0),
+	], 6, body, DARK)
+	b.loft("dim", [Vector4(-3.6, 0.05, 0.05, 0.6), Vector4(-2.2, 0.42, 0.34, 0.7), Vector4(-0.2, 0.44, 0.36, 0.72), Vector4(0.8, 0.05, 0.05, 0.6)], 6, Color(0.6, 0.35, 0.12))
+	for sx in [-1.0, 1.0]:
+		# side nacelles
+		b.cyl("hull", Vector3(2.6 * sx, 0.0, -3.0), Vector3(2.6 * sx, 0.0, 4.4), 0.55, 0.75, 8, body)
+		b.cyl("glow", Vector3(2.6 * sx, 0.0, 4.42), Vector3(2.6 * sx, 0.0, 4.5), 0.45, 0.45, 8, CYAN)
+		b.cyl("hull", Vector3(2.6 * sx, 0.0, -3.6), Vector3(2.6 * sx, 0.0, -3.0), 0.12, 0.3, 6, DARK)
+		# wing joining nacelle and body, plus outer blade
+		b.slab("hull", [Vector2(0.9 * sx, -0.8), Vector2(2.4 * sx, -1.2), Vector2(2.4 * sx, 2.8), Vector2(0.9 * sx, 3.0)], -0.05, 0.16, body, DARK)
+		b.slab("hull", [Vector2(3.0 * sx, 0.6), Vector2(5.4 * sx, 2.6), Vector2(5.4 * sx, 3.4), Vector2(3.0 * sx, 3.2)], -0.05, 0.12, stripe, DARK)
+		# canards
+		b.slab("hull", [Vector2(0.6 * sx, -4.0), Vector2(1.9 * sx, -3.2), Vector2(1.9 * sx, -2.8), Vector2(0.6 * sx, -2.6)], 0.0, 0.08, stripe)
+		b.box("hull", Vector3(2.6 * sx, 0.9, 2.6), Vector3(0.12, 1.4, 1.3), DARK, Basis(Vector3.RIGHT, -0.45))
+		b.box("glow", Vector3(1.6 * sx, 0.1, 0.8), Vector3(0.9, 0.04, 0.1), CYAN)
+	b.cyl("hull", Vector3(0, -0.6, -6.0), Vector3(0, -0.6, -3.5), 0.12, 0.16, 5, DARK)
+	return b.build(MeshBuilder.default_materials())
+
+
+static func _mule() -> ArrayMesh:
+	var b := MeshBuilder.new()
+	var body := Color(0.82, 0.68, 0.32)
+	var plate := Color(0.4, 0.42, 0.45)
+	# cockpit nose
+	b.loft("hull", [Vector4(-7.8, 0.6, 0.5, 1.2), Vector4(-6.6, 1.6, 1.2, 1.1), Vector4(-4.4, 2.0, 1.5, 0.9), Vector4(-3.6, 1.8, 1.4, 0.8)], 8, body, plate)
+	b.box("dim", Vector3(0, 1.75, -6.2), Vector3(2.2, 0.5, 1.2), Color(0.2, 0.45, 0.6), Basis(Vector3.RIGHT, 0.5))
+	# cargo body
+	b.box("hull", Vector3(0, 0.3, 0.0), Vector3(5.6, 3.6, 8.4), plate)
+	for z in [-2.6, 0.0, 2.6]:
+		for sx in [-1.0, 1.0]:
+			b.box("hull", Vector3(2.9 * sx, 0.3, z), Vector3(0.3, 3.2, 2.2), body)
+		b.box("hull", Vector3(0, 2.2, z), Vector3(5.0, 0.3, 2.2), body)
+	b.box("glow", Vector3(0, 2.4, 3.9), Vector3(0.3, 0.3, 0.3), RED)
+	# engines
+	for sx in [-1.0, 1.0]:
+		for sy in [-1.0, 1.0]:
+			b.cyl("hull", Vector3(1.6 * sx, 0.3 + 1.0 * sy, 4.2), Vector3(1.6 * sx, 0.3 + 1.0 * sy, 6.0), 0.8, 0.95, 8, DARK)
+			b.cyl("glow", Vector3(1.6 * sx, 0.3 + 1.0 * sy, 6.02), Vector3(1.6 * sx, 0.3 + 1.0 * sy, 6.1), 0.5, 0.5, 8, Color(0.7, 0.5, 0.22))
+		b.box("hull", Vector3(3.4 * sx, 1.2, -5.4), Vector3(0.5, 0.5, 3.4), DARK)
+		b.slab("hull", [Vector2(2.8 * sx, -1.5), Vector2(4.6 * sx, 0.5), Vector2(4.6 * sx, 2.5), Vector2(2.8 * sx, 3.0)], -1.2, 0.2, plate, DARK)
+	return b.build(MeshBuilder.default_materials())
+
+
+static func _corsair() -> ArrayMesh:
+	var b := MeshBuilder.new()
+	var body := Color(0.28, 0.3, 0.34)
+	var accent := Color(0.95, 0.5, 0.15)
+	b.loft("hull", [
+		Vector4(-6.8, 1.6, 0.4, 0.0),
+		Vector4(-5.5, 2.8, 0.9, 0.1),
+		Vector4(-2.0, 2.2, 1.3, 0.2),
+		Vector4(2.5, 2.0, 1.3, 0.2),
+		Vector4(4.6, 1.4, 0.9, 0.1),
+	], 6, body, DARK, 0.0, PI / 6.0)
+	b.loft("dim", [Vector4(-4.8, 0.05, 0.05, 1.05), Vector4(-3.4, 0.6, 0.4, 1.25), Vector4(-1.4, 0.6, 0.4, 1.3), Vector4(-0.4, 0.05, 0.05, 1.2)], 6, Color(0.7, 0.35, 0.1))
+	for sx in [-1.0, 1.0]:
+		b.slab("hull", [Vector2(1.8 * sx, -3.0), Vector2(4.4 * sx, -2.4), Vector2(5.2 * sx, 3.6), Vector2(1.8 * sx, 4.0)], -0.2, 0.3, body, DARK)
+		b.box("hull", Vector3(4.6 * sx, 0.0, 0.4), Vector3(1.2, 1.2, 6.0), DARK)
+		b.cyl("hull", Vector3(3.8 * sx, 0.4, -6.4), Vector3(3.8 * sx, 0.4, -2.6), 0.18, 0.28, 6, STEEL)
+		b.cyl("hull", Vector3(2.2 * sx, -0.6, -7.2), Vector3(2.2 * sx, -0.6, -4.8), 0.16, 0.24, 6, STEEL)
+		b.cyl("hull", Vector3(1.5 * sx, 0.1, 3.8), Vector3(1.5 * sx, 0.1, 6.2), 1.0, 1.15, 8, DARK)
+		b.cyl("hull", Vector3(1.5 * sx, 0.1, 6.2), Vector3(1.5 * sx, 0.1, 6.24), 1.1, 0.75, 8, DARK)
+		b.cyl("glow", Vector3(1.5 * sx, 0.1, 6.22), Vector3(1.5 * sx, 0.1, 6.3), 0.55, 0.55, 8, Color(0.75, 0.38, 0.15))
+		b.box("glow", Vector3(3.6 * sx, 0.15, 1.4), Vector3(1.4, 0.06, 0.15), accent)
+		b.box("hull", Vector3(4.9 * sx, 0.9, 2.8), Vector3(0.14, 1.6, 1.6), accent, Basis(Vector3.RIGHT, -0.4))
+	return b.build(MeshBuilder.default_materials())
+
+
+static func _seraph() -> ArrayMesh:
+	var b := MeshBuilder.new()
+	var body := Color(0.9, 0.92, 0.96)
+	var trim := Color(0.45, 0.4, 0.6)
+	var glow := Color(0.7, 0.45, 1.0)
+	b.loft("hull", [
+		Vector4(-7.5, 0.05, 0.05, 0.0),
+		Vector4(-4.5, 0.75, 0.45, 0.05),
+		Vector4(-1.0, 1.2, 0.7, 0.1),
+		Vector4(2.5, 1.15, 0.7, 0.1),
+		Vector4(4.8, 0.8, 0.5, 0.05),
+	], 8, body, trim)
+	b.loft("dim", [Vector4(-4.2, 0.05, 0.05, 0.42), Vector4(-2.6, 0.4, 0.3, 0.55), Vector4(-0.4, 0.42, 0.32, 0.6), Vector4(0.6, 0.05, 0.05, 0.5)], 6, Color(0.35, 0.2, 0.55))
+	for sx in [-1.0, 1.0]:
+		# forward-swept upper wing and swept-back lower wing
+		b.slab("hull", [Vector2(1.0 * sx, 0.2), Vector2(5.6 * sx, -2.2), Vector2(6.0 * sx, -1.4), Vector2(1.0 * sx, 2.4)], 0.25, 0.12, body, trim)
+		b.slab("hull", [Vector2(1.0 * sx, 1.0), Vector2(4.6 * sx, 4.2), Vector2(4.4 * sx, 4.8), Vector2(1.0 * sx, 3.8)], -0.3, 0.12, body, trim)
+		b.box("glow", Vector3(3.4 * sx, 0.32, -0.6), Vector3(3.0, 0.04, 0.12), glow, Basis(Vector3.UP, 0.45 * sx))
+		b.cyl("hull", Vector3(1.3 * sx, 0.0, 2.6), Vector3(1.3 * sx, 0.0, 5.4), 0.55, 0.7, 8, trim)
+		b.cyl("glow", Vector3(1.3 * sx, 0.0, 5.42), Vector3(1.3 * sx, 0.0, 5.5), 0.42, 0.42, 8, glow.darkened(0.2))
+		b.cyl("hull", Vector3(3.2 * sx, 0.0, -4.4), Vector3(3.2 * sx, 0.0, -1.0), 0.12, 0.2, 6, trim)
+		b.box("glow", Vector3(6.0 * sx, 0.25, -1.6), Vector3(0.25, 0.25, 0.25), glow)
+	b.slab("hull", [Vector2(0.0, 1.2), Vector2(0.0, 4.6), Vector2(0.02, 4.6)], 0.7, 0.1, trim)
+	b.box("hull", Vector3(0, 1.3, 3.8), Vector3(0.12, 1.4, 1.6), body, Basis(Vector3.RIGHT, -0.55))
+	return b.build(MeshBuilder.default_materials())
+
+
 static func raider_ship() -> ArrayMesh:
 	var b := MeshBuilder.new()
 	var body := Color(0.3, 0.27, 0.28)

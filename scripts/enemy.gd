@@ -50,14 +50,23 @@ func _random_patrol() -> Vector3:
 
 
 func take_damage(d: float) -> void:
+	if hp <= 0.0:
+		return
 	hp -= d
 	aggro = true
 	if state == State.PATROL:
 		state = State.ATTACK
 	if hp <= 0.0:
+		remove_from_group("enemies")
 		world.combat.explosion(global_position, 1.3 if elite else 1.0)
+		world.spawn_loot(global_position, Loot.raider_drop(elite, rng))
 		GameState.on_enemy_killed(bounty)
 		queue_free()
+
+
+## True while this raider is actively fighting the player (drives combat music).
+func engaged() -> bool:
+	return state != State.PATROL
 
 
 func _physics_process(delta: float) -> void:

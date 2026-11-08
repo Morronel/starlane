@@ -42,7 +42,7 @@ func _physics_process(delta: float) -> void:
 	if fp:
 		# cockpit view: locked to the ship with a touch of rotational smoothing
 		smooth_basis = smooth_basis.slerp(t.basis.orthonormalized(), 1.0 - exp(-delta * 20.0)).orthonormalized()
-		global_position = t * Vector3(0, 0.75, -1.4)
+		global_position = t * (Vector3(0, 0.75, -1.4) * target.cam_scale)
 		global_basis = smooth_basis
 		_fov_and_shake(delta, in_lane)
 		return
@@ -51,7 +51,7 @@ func _physics_process(delta: float) -> void:
 	var k := 7.0 if not in_lane else 5.0
 	smooth_basis = smooth_basis.slerp(t.basis.orthonormalized(), 1.0 - exp(-delta * k)).orthonormalized()
 	var pull := clampf(target.speed / target.top_speed(), 0.0, 3.0)
-	var offset := Vector3(0, 3.4, 13.5 + pull * 1.5) if not in_lane else Vector3(0, 4.2, 17.0)
+	var offset := (Vector3(0, 3.4, 13.5 + pull * 1.5) if not in_lane else Vector3(0, 4.6, 19.0)) * target.cam_scale
 	global_position = t.origin + smooth_basis * offset
 	var look_at_pt2 := t.origin + smooth_basis * Vector3(0, 1.2, 0) + t.basis * Vector3(0, 0, -40.0)
 	global_basis = Transform3D().looking_at(look_at_pt2 - global_position, smooth_basis.y).basis
@@ -80,4 +80,4 @@ func _fov_and_shake(delta: float, in_lane: bool) -> void:
 func snap() -> void:
 	if target:
 		smooth_basis = target.global_transform.basis.orthonormalized()
-		global_transform = target.global_transform * Transform3D(Basis(), Vector3(0, 3.4, 13.5))
+		global_transform = target.global_transform * Transform3D(Basis(), Vector3(0, 3.4, 13.5) * target.cam_scale)

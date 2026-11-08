@@ -4,9 +4,9 @@ extends Node3D
 ## overtake traffic, and choose where to drop out.
 ## Lane coordinates: s = meters along the curve, offset = Vector2 in the lane frame.
 
-const RADIUS := 64.0
-const TRAFFIC_SIDE := 28.0
-const ENTRY_RANGE := 450.0
+const RADIUS := 150.0
+const TRAFFIC_SIDE := 70.0
+const MERGE_RANGE := 240.0   # manual ENTER LANE works this close to the lane axis
 
 var curve := Curve3D.new()
 var length := 0.0
@@ -23,7 +23,7 @@ func build(points: Array, exit_defs: Array) -> void:
 		var next: Vector3 = points[mini(i + 1, points.size() - 1)]
 		var tan := (next - prev) * 0.25
 		curve.add_point(p, -tan, tan)
-	curve.bake_interval = 20.0
+	curve.bake_interval = 30.0
 	length = curve.get_baked_length()
 	for e in exit_defs:
 		var s := curve.get_closest_offset(e["pos"])
@@ -50,7 +50,14 @@ func lane_to_world(s: float, offset: Vector2) -> Vector3:
 	return f["origin"] + f["right"] * offset.x + f["up"] * offset.y
 
 
-## Nearest entry point a ship at `pos` can use (gates and beacon only).
+## Closest point on the lane axis: {s, dist, pos}.
+func closest(pos: Vector3) -> Dictionary:
+	var s := curve.get_closest_offset(pos)
+	var p := curve.sample_baked(s, true)
+	return {"s": s, "dist": p.distance_to(pos), "pos": p}
+
+
+## Nearest named exit (stations, gates, beacon).
 func nearest_entry(pos: Vector3) -> Dictionary:
 	var best := {}
 	var best_d := INF
@@ -77,8 +84,8 @@ func next_exit(s: float, dir: int) -> Dictionary:
 func _build_tube() -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var sides := 16
-	var step := 25.0
+	var sides := 18
+	var step := 60.0
 	var n := int(ceil(length / step))
 	var rings := []
 	for i in n + 1:
@@ -113,7 +120,7 @@ func _build_tube() -> void:
 		var f0 := frame(i * step)
 		var f1 := frame(minf((i + 1) * step, length))
 		for ax in [f0["right"], f0["up"]]:
-			var w: Vector3 = ax * 1.6
+			var w: Vector3 = ax * 3.0
 			var a0: Vector3 = f0["origin"] - w
 			var a1: Vector3 = f0["origin"] + w
 			var b0: Vector3 = f1["origin"] - w
@@ -124,8 +131,8 @@ func _build_tube() -> void:
 	cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	cm.albedo_color = Color(0.25, 0.7, 1.0)
 	cm.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
-	cm.distance_fade_min_distance = 40.0
-	cm.distance_fade_max_distance = 400.0
+	cm.distance_fade_min_distance = 80.0
+	cm.distance_fade_max_distance = 900.0
 	cm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	cm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -142,14 +149,15 @@ func _build_gates() -> void:
 		var g := MeshInstance3D.new()
 		g.mesh = Models.gate_ring(e["color"])
 		add_child(g)
-		g.global_transform = Transform3D(Basis.looking_at(f["fwd"], f["up"]), f["origin"])
+		var sc := RADIUS / 46.0 * 1.08
+		g.global_transform = Transform3D(Basis.looking_at(f["fwd"], f["up"]).scaled(Vector3.ONE * sc), f["origin"])
 
 
 func _spawn_traffic() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 42
 	for dir in [1, -1]:
-		var count := 8
+		var count := 22
 		for i in count:
 			var node := MeshInstance3D.new()
 			node.mesh = Models.freighter(rng.randi())
@@ -158,7 +166,7 @@ func _spawn_traffic() -> void:
 			traffic.append({
 				"node": node, "s": s, "dir": dir,
 				"speed": rng.randf_range(220.0, 300.0),
-				"offset": Vector2(TRAFFIC_SIDE * dir + rng.randf_range(-8, 8), rng.randf_range(-14, 14)),
+				"offset": Vector2(TRAFFIC_SIDE * dir + rng.randf_range(-22, 22), rng.randf_range(-35, 35)),
 			})
 
 
@@ -176,9 +184,21 @@ func _process(delta: float) -> void:
 		node.global_transform = Transform3D(Basis.looking_at(fwd, f["up"]), pos)
 
 
-## Returns the traffic entry the given lane position collides with, or {}.
-func traffic_hit(s: float, offset: Vector2) -> Dictionary:
+## Traffic the ship hit while moving from s0 to s1 at `offset` (swept, so fast
+## ships can't tunnel through freighters), or {}.
+func traffic_hit(s0: float, s1: float, offset: Vector2) -> Dictionary:
+	var lo := minf(s0, s1) - 16.0
+	var hi := maxf(s0, s1) + 16.0
 	for t in traffic:
-		if absf(t["s"] - s) < 16.0 and (t["offset"] as Vector2).distance_to(offset) < 6.5:
+		if t["s"] > lo and t["s"] < hi and (t["offset"] as Vector2).distance_to(offset) < 7.0:
+			return t
+	return {}
+
+
+## Is a lane position close behind/ahead of traffic (used by the autopilot to dodge)?
+func traffic_near(s: float, dir: int, offset: Vector2, look: float) -> Dictionary:
+	for t in traffic:
+		var d: float = (t["s"] - s) * dir
+		if d > 0.0 and d < look and (t["offset"] as Vector2).distance_to(offset) < 14.0:
 			return t
 	return {}

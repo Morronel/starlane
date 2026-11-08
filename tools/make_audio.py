@@ -603,6 +603,96 @@ def sfx_autofire_off():
     return fade(reverb(stereo(x), wet=0.15, dur=0.8, decay=6), 0.0005, 0.05)
 
 
+def sfx_missile_launch():
+    d = 1.6
+    t = t_axis(d)
+    pop = lp(noise(d), 900) * np.exp(-t * 30) * 2.0
+    hiss = bp(noise(d), 1500, 9000) * np.clip(t / 0.04, 0, 1) * np.exp(-t * 1.6) * 0.8
+    roar = lp(noise(d), 380) * np.clip(t / 0.06, 0, 1) * np.exp(-t * 2.2) * 1.6
+    whine = np.sin(chirp_phase(t, 500, 1800, d)) * np.exp(-t * 2.8) * 0.12
+    x = softclip(pop + hiss + roar + whine, 1.4)
+    return fade(reverb(stereo(x, delay_ms=11), wet=0.22, dur=1.6, decay=3), 0.0005, 0.4)
+
+
+def sfx_loot_pickup():
+    d = 0.9
+    x = np.zeros(int(d * SR))
+    for i, n in enumerate([84, 88, 91, 96]):
+        b = fm_bell(note_hz(n), 0.6, ratio=2.0, index=1.0, decay=6, idx_decay=8) * 0.35
+        add_at(x, b, int(i * 0.045 * SR))
+    t = t_axis(d)
+    x += np.sin(chirp_phase(t, 300, 900, 0.12)) * np.exp(-t * 30) * 0.3
+    return fade(reverb(stereo(x, delay_ms=4), wet=0.25, dur=1.0, decay=4, bright=9000), 0.0005, 0.2)
+
+
+def sfx_autopilot_on():
+    d = 1.1
+    x = np.zeros(int(d * SR))
+    for i, n in enumerate([69, 76, 81]):
+        b = fm_bell(note_hz(n), 0.8, ratio=1.0, index=1.6, decay=4, idx_decay=5) * 0.4
+        add_at(x, b, int(i * 0.09 * SR))
+    t = t_axis(d)
+    x += sweep_lp(noise(d), 300, 4000) * np.sin(np.pi * np.clip(t / 0.5, 0, 1)) * 0.12
+    return fade(reverb(stereo(x, delay_ms=6), wet=0.3, dur=1.4, decay=3, bright=8000), 0.001, 0.3)
+
+
+def sfx_autopilot_off():
+    d = 0.9
+    x = np.zeros(int(d * SR))
+    for i, n in enumerate([81, 76, 69]):
+        b = fm_bell(note_hz(n), 0.7, ratio=1.0, index=1.4, decay=5, idx_decay=6) * 0.35
+        add_at(x, b, int(i * 0.08 * SR))
+    return fade(reverb(stereo(x, delay_ms=6), wet=0.25, dur=1.2, decay=3.5, bright=7000), 0.001, 0.3)
+
+
+def sfx_craft():
+    """Workshop assembly: ratchets, a servo whirr, a heavy clamp and a bright chord."""
+    d = 2.6
+    t = t_axis(d)
+    x = np.zeros(len(t))
+    for k in range(7):
+        o = 0.05 + k * 0.08
+        tt = np.maximum(t - o, 0)
+        click = bp(noise(d), 2500, 9000) * np.exp(-tt * 140) * (t >= o) * 0.7
+        tick = np.sin(2 * np.pi * (1800 + k * 120) * tt) * np.exp(-tt * 90) * (t >= o) * 0.25
+        x += click + tick
+    servo_t = np.clip((t - 0.2) / 0.7, 0, 1)
+    servo = saw(chirp_phase(t, 180, 520, 0.9)) * np.sin(np.pi * servo_t) * (t < 0.9) * 0.08
+    x += lp(servo, 2500)
+    ct = np.maximum(t - 0.95, 0)
+    clamp = (sum(a * np.sin(2 * np.pi * 140 * m * ct) * np.exp(-ct * dc) for m, a, dc in ((1, 1, 9), (2.76, 0.5, 13), (5.4, 0.25, 18))) * 0.5
+             + lp(noise(d), 260) * np.exp(-ct * 22) * 2.2) * (t >= 0.95)
+    x += clamp
+    chord = np.zeros(len(t))
+    for i, n in enumerate([74, 78, 81, 86, 90]):
+        b = fm_bell(note_hz(n), d - 1.1, ratio=2.0, index=1.6, decay=1.4, idx_decay=2.2) * 0.22
+        add_at(chord, b, int((1.05 + i * 0.05) * SR))
+    x = softclip(x + chord, 1.3)
+    return fade(reverb(stereo(x, delay_ms=9), wet=0.3, dur=2.4, decay=2.2, bright=8000), 0.0005, 0.5)
+
+
+def sfx_equip():
+    d = 1.0
+    t = t_axis(d)
+    slide = bp(noise(d), 600, 3000) * np.sin(np.pi * np.clip(t / 0.25, 0, 1)) * (t < 0.25) * 0.3
+    ct = np.maximum(t - 0.22, 0)
+    lock = (np.sin(2 * np.pi * 220 * ct) * np.exp(-ct * 18) * 0.6 + np.sin(2 * np.pi * 607 * ct) * np.exp(-ct * 25) * 0.3
+            + lp(noise(d), 400) * np.exp(-ct * 35) * 1.8) * (t >= 0.22)
+    beep = np.sin(2 * np.pi * 2600 * np.maximum(t - 0.45, 0)) * ((t > 0.45) & (t < 0.52)) * 0.15
+    x = softclip(slide + lock + beep, 1.3)
+    return fade(reverb(stereo(x, delay_ms=7), wet=0.2, dur=1.0, decay=4), 0.0005, 0.2)
+
+
+def sfx_lane_merge():
+    d = 1.4
+    t = t_axis(d)
+    w = whoosh(d, 400, 8000) * 0.8
+    thump = np.sin(chirp_phase(t, 140, 40, 0.5)) * np.exp(-t * 6) * 0.9
+    shimmer = sum(fm_bell(note_hz(n), d, ratio=2.0, index=1.0, decay=2.0) for n in (81, 88, 93)) * 0.07
+    x = w + thump + shimmer
+    return fade(reverb(stereo(x, delay_ms=13), wet=0.3, dur=2.0, decay=2.8, bright=7000), 0.005, 0.4)
+
+
 SFX = {
     "laser_player": (sfx_laser_player, 0.8),
     "laser_enemy": (sfx_laser_enemy, 0.8),
@@ -629,6 +719,13 @@ SFX = {
     "target_lock": (sfx_target_lock, 0.6),
     "autofire_on": (sfx_autofire_on, 0.7),
     "autofire_off": (sfx_autofire_off, 0.7),
+    "missile_launch": (sfx_missile_launch, 0.85),
+    "loot_pickup": (sfx_loot_pickup, 0.7),
+    "autopilot_on": (sfx_autopilot_on, 0.7),
+    "autopilot_off": (sfx_autopilot_off, 0.7),
+    "craft": (sfx_craft, 0.85),
+    "equip": (sfx_equip, 0.8),
+    "lane_merge": (sfx_lane_merge, 0.85),
 }
 
 
@@ -770,6 +867,170 @@ def music_station():
     return render_music("station", 120.0, chords, 10.0, scale, 29, colors)
 
 
+def drum_kick(dur=0.6):
+    t = t_axis(dur)
+    body = np.sin(chirp_phase(t, 150, 42, 0.12)) * np.exp(-t * 7)
+    click = lp(noise(dur), 3000) * np.exp(-t * 120) * 0.5
+    return softclip(body * 1.3 + click, 1.5)
+
+
+def drum_tom(f, dur=0.9):
+    t = t_axis(dur)
+    body = np.sin(chirp_phase(t, f * 1.6, f, 0.08)) * np.exp(-t * 5)
+    skin = bp(noise(dur), f * 2, f * 8) * np.exp(-t * 25) * 0.6
+    return softclip(body + skin, 1.4)
+
+
+def drum_snare(dur=0.5):
+    t = t_axis(dur)
+    tone = np.sin(2 * np.pi * 190 * t) * np.exp(-t * 22) * 0.6
+    rattle = bp(noise(dur), 1500, 9000) * np.exp(-t * 13)
+    return tone + rattle
+
+
+def drum_hat(dur=0.12, open_=False):
+    t = t_axis(dur)
+    return hp(noise(dur), 7000) * np.exp(-t * (14 if open_ else 60))
+
+
+def brass_stab(freqs, dur):
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    x = sum(supersaw(f, n, voices=5, detune=0.008, seed=int(f)) for f in freqs) / len(freqs)
+    env = adsr(n, 0.015, 0.12, 0.55, 0.12)
+    cut = 600 + 4200 * np.exp(-t * 7)
+    return mod_lp(x * env, cut, block=256)
+
+
+def music_combat():
+    """Driving 132 BPM combat loop: A minor, toms + kick, 16th bass ostinato, brass stabs, risers."""
+    bpm = 132.0
+    beat = 60.0 / bpm
+    bars = 48
+    length_s = bars * 4 * beat
+    tail = 6.0
+    n = int((length_s + tail) * SR)
+    mix = np.zeros((n, 2))
+    r = np.random.default_rng(5)
+
+    # chord roots per bar (2 bars each): Am F G Em | Dm Bb C E
+    prog = [(45, [57, 60, 64]), (41, [57, 60, 65]), (43, [55, 59, 62]), (40, [55, 59, 64]),
+            (38, [57, 62, 65]), (46, [58, 62, 65]), (48, [55, 60, 64]), (40, [56, 59, 64])]
+
+    def chord_at(bar):
+        return prog[(bar // 2) % len(prog)]
+
+    kick = drum_kick()
+    snare = drum_snare()
+    hat = drum_hat()
+    ohat = drum_hat(0.4, True)
+    toms = [drum_tom(f) for f in (70, 95, 130)]
+
+    def put(sig, tsec, gain, p=0.0):
+        o = int(tsec * SR)
+        st = pan(sig * gain, p)
+        m = min(len(st), n - o)
+        if m > 0:
+            mix[o:o + m] += st[:m]
+
+    for bar in range(bars):
+        t0 = bar * 4 * beat
+        section = (bar // 8) % 6  # 0 intro-ish, then build
+        intense = section >= 1
+        # kick: four on the floor with a syncopated push
+        for b in range(4):
+            put(kick, t0 + b * beat, 0.9)
+        if intense:
+            put(kick, t0 + 3.5 * beat, 0.55)
+        # snare / clap backbeat
+        if intense:
+            for b in (1, 3):
+                put(snare, t0 + b * beat, 0.42, 0.1)
+        # hats: 16ths with accents
+        for k in range(16):
+            acc = 0.22 if k % 4 == 2 else 0.11
+            if not intense and k % 2 == 1:
+                continue
+            put(hat, t0 + k * beat / 4, acc, 0.35 if k % 2 else -0.25)
+        if intense:
+            put(ohat, t0 + 1.5 * beat, 0.12, 0.4)
+            put(ohat, t0 + 3.5 * beat, 0.12, -0.4)
+        # taiko pattern every other bar, fills every 8th bar
+        if bar % 2 == 1:
+            for k, (pos, ti) in enumerate([(0.0, 2), (0.75, 1), (1.5, 1), (2.0, 0), (2.5, 0), (3.0, 1)]):
+                put(toms[ti], t0 + pos * beat, 0.5, (ti - 1) * 0.4)
+        if bar % 8 == 7:
+            for k in range(8):
+                put(toms[2 - (k % 3)], t0 + (2 + k * 0.25) * beat, 0.45 + k * 0.04, (k % 3 - 1) * 0.5)
+
+    # 16th-note bass ostinato
+    bass = np.zeros(n)
+    patt = [0, 0, 12, 0, 0, 7, 0, 12, 0, 0, 12, 0, 10, 0, 7, 0]
+    for bar in range(bars):
+        root, _ = chord_at(bar)
+        for k in range(16):
+            ts = bar * 4 * beat + k * beat / 4
+            dur = beat / 4 * 0.9
+            m = int(dur * SR)
+            tt = np.arange(m) / SR
+            f = note_hz(root - 12 + patt[k])
+            v = saw(2 * np.pi * f * tt) * 0.6 + np.sin(2 * np.pi * f * 0.5 * tt) * 0.6
+            env = np.exp(-tt * 14) * (1 - np.exp(-tt * 400))
+            cut = 300 + 1600 * np.exp(-tt * 20) * (1.0 if k % 4 == 0 else 0.6)
+            v = mod_lp(v * env, cut, block=64)
+            add_at(bass, v * (1.0 if k % 4 == 0 else 0.75), int(ts * SR))
+    bass = softclip(bass * 1.4, 1.3)
+    mix += np.stack([bass, bass], 1) * 0.38
+
+    # dark string pad
+    pad = np.zeros((n, 2))
+    for ci in range(bars // 2):
+        root, notes = chord_at(ci * 2)
+        ts = ci * 8 * beat
+        seg = 8 * beat + 0.5
+        m = int(seg * SR)
+        env = adsr(m, 0.6, 0.5, 0.8, 0.8)
+        for vi, nt in enumerate(notes + [root + 12]):
+            v = supersaw(note_hz(nt), m, voices=5, detune=0.009, seed=ci * 7 + vi)
+            v = lp(v, 1600) * env * 0.11
+            p = (vi / 3.0) * 1.4 - 0.7
+            o = int(ts * SR)
+            mm = min(m, n - o)
+            pad[o:o + mm] += pan(v[:mm], p)
+    mix += pad
+
+    # brass stabs on the off-beats of every second bar (from bar 8)
+    for bar in range(8, bars, 2):
+        root, notes = chord_at(bar)
+        for pos in (0.0, 0.75, 1.5):
+            st = brass_stab([note_hz(x) for x in notes], beat * 0.5)
+            put(st, bar * 4 * beat + pos * beat, 0.32, r.uniform(-0.3, 0.3))
+    # arpeggio lead in the second half
+    for bar in range(24, bars):
+        root, notes = chord_at(bar)
+        arp = notes + [notes[0] + 12, notes[1] + 12]
+        for k in range(8):
+            nt = arp[(k * 2 + bar) % len(arp)] + 12
+            b = fm_bell(note_hz(nt), 0.45, ratio=3.0, index=2.0, decay=7, idx_decay=9) * 0.09
+            put(b, bar * 4 * beat + k * beat / 2, 1.0, 0.5 if k % 2 else -0.5)
+    # risers into each 8-bar section
+    for bar in range(6, bars, 8):
+        d = 2 * 4 * beat
+        m = int(d * SR)
+        tt = np.arange(m) / SR
+        rs = sweep_lp(rng.standard_normal(m), 200, 9000, block=256) * (tt / d) ** 2.5 * 0.35
+        put(rs, bar * 4 * beat, 1.0)
+        put(drum_kick(1.2) * 0.9, (bar + 2) * 4 * beat, 1.0)
+
+    mix = hp(mix, 30)
+    mix = reverb(mix, wet=0.18, dur=2.5, decay=2.5, bright=7000, tail=False)
+    body_n = int(length_s * SR)
+    body = mix[:body_n].copy()
+    tail_part = mix[body_n:]
+    body[:len(tail_part)] += tail_part
+    return softclip(body * 1.15, 1.3)
+
+
 def main():
     what = sys.argv[1] if len(sys.argv) > 1 else "all"
     if what in ("all", "sfx"):
@@ -786,6 +1047,8 @@ def main():
         print("music:")
         write("music_flight", music_flight(), peak=0.8, q=5)
         write("music_station", music_station(), peak=0.8, q=5)
+    if what in ("all", "music", "combat"):
+        write("music_combat", music_combat(), peak=0.85, q=5)
 
 
 if __name__ == "__main__":

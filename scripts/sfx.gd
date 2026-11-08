@@ -32,7 +32,8 @@ func _ready() -> void:
 	for f in ["laser_player", "laser_enemy", "explosion", "explosion_big", "hit_shield", "hit_hull",
 			"engine_loop", "lane_loop", "lane_enter", "lane_exit", "boost", "jump", "ui_click", "ui_tab",
 			"ui_buy", "ui_upgrade", "ui_error", "ui_open", "dock_clamp", "launch", "alarm",
-			"mission_complete", "target_lock", "autofire_on", "autofire_off", "music_flight", "music_station"]:
+			"mission_complete", "target_lock", "autofire_on", "autofire_off", "missile_launch", "loot_pickup",
+			"autopilot_on", "autopilot_off", "craft", "equip", "lane_merge", "music_flight", "music_station", "music_combat"]:
 		var s = load(DIR + f + ".ogg")
 		if s:
 			if s is AudioStreamOggVorbis and (f.ends_with("_loop") or f.begins_with("music_")):
@@ -47,7 +48,7 @@ func _ready() -> void:
 
 	_engine = _looper("engine_loop", -40.0)
 	_lane = _looper("lane_loop", -60.0)
-	for m in ["music_flight", "music_station"]:
+	for m in ["music_flight", "music_station", "music_combat"]:
 		var p := AudioStreamPlayer.new()
 		p.stream = _streams.get(m)
 		p.bus = "Music"
@@ -94,8 +95,11 @@ func music(name: String) -> void:
 func _process(delta: float) -> void:
 	for k in _music:
 		var p: AudioStreamPlayer = _music[k]
-		var target := -6.0 if k == _music_target else -60.0
-		p.volume_db = move_toward(p.volume_db, target, delta * (14.0 if target > p.volume_db else 20.0))
+		var on_db := -9.5 if k == "music_combat" else -6.0
+		var target := on_db if k == _music_target else -60.0
+		# combat kicks in fast, everything else drifts
+		var up_rate := 40.0 if k == "music_combat" else 14.0
+		p.volume_db = move_toward(p.volume_db, target, delta * (up_rate if target > p.volume_db else 16.0))
 		if p.volume_db <= -59.0 and p.playing and k != _music_target:
 			p.stop()
 	_lane.volume_db = move_toward(_lane.volume_db, -8.0 if _lane_active else -60.0, delta * 40.0)
