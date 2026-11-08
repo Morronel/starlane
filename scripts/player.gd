@@ -6,7 +6,7 @@ signal died
 signal docked(station: Station)
 signal lane_changed(in_lane: bool)
 
-enum Mode { FLIGHT, LANE, DOCKING, DOCKED, DEAD }
+enum Mode { FLIGHT, LANE, DOCKING, DOCKED, DEAD, JUMPING }
 
 var mode := Mode.FLIGHT
 var world: Node   # main.gd
@@ -76,6 +76,7 @@ func _physics_process(delta: float) -> void:
 		_:
 			pass
 	_regen(delta)
+	update_view_mode()
 	if mode == Mode.FLIGHT or mode == Mode.LANE:
 		_weapons(delta)
 	engine_glow.light_energy = 0.6 + clampf(speed / top_speed(), 0.0, 2.5) * 1.2
@@ -132,6 +133,7 @@ func take_damage(amount: float) -> void:
 		return
 	shield_delay = 3.5
 	world.shake(0.25)
+	world.sfx.hit(shield > amount)
 	if shield > 0.0:
 		var absorbed := minf(shield, amount)
 		shield -= absorbed
@@ -158,7 +160,13 @@ func _die() -> void:
 func _weapons(delta: float) -> void:
 	fire_cd -= delta
 	target = world.pick_target(self)
-	if GameInput.fire and fire_cd <= 0.0 and mode == Mode.FLIGHT:
+	var want_fire: bool = GameInput.fire
+	if GameInput.auto_fire and target and not want_fire:
+		# auto-attack: fire whenever the target sits inside the aim-assist cone
+		var lead0: Vector3 = world.lead_point(global_position, target, Combat.PLAYER_BOLT_SPEED)
+		var fwd0 := -global_transform.basis.z
+		want_fire = (lead0 - global_position).normalized().dot(fwd0) > cos(deg_to_rad(11.0)) and global_position.distance_to(lead0) < 1500.0
+	if want_fire and fire_cd <= 0.0 and mode == Mode.FLIGHT:
 		fire_cd = 0.14
 		gun_side = -gun_side
 		var origin := global_transform * Vector3(gun_side * 1.6, 0.0, -3.0)
@@ -214,8 +222,8 @@ func _lane_ride(delta: float) -> void:
 	lane_s += lane_dir * lane_speed * delta
 	var steer: Vector2 = inp.stick
 	# lane right flips when travelling backwards
-	lane_offset += Vector2(steer.x * lane_dir, steer.y) * 45.0 * delta
-	lane_offset = lane_offset.limit_length(SpaceLane.RADIUS - 5.0)
+	lane_offset += Vector2(steer.x * lane_dir, steer.y) * 70.0 * delta
+	lane_offset = lane_offset.limit_length(SpaceLane.RADIUS - 8.0)
 
 	lane_bump_cd -= delta
 	if lane_bump_cd <= 0.0:
@@ -266,6 +274,25 @@ func _leave_lane(announce: bool) -> void:
 
 
 # --- Docking ------------------------------------------------------------------
+
+func can_jump() -> Stargate:
+	if mode != Mode.FLIGHT:
+		return null
+	for g in get_tree().get_nodes_in_group("stargates"):
+		var sg := g as Stargate
+		if sg.global_position.distance_to(global_position) < Stargate.JUMP_RANGE or sg.approach_point().distance_to(global_position) < Stargate.JUMP_RANGE:
+			return sg
+	return null
+
+
+func update_view_mode() -> void:
+	var fp := Settings.first_person and (mode == Mode.FLIGHT or mode == Mode.LANE or mode == Mode.JUMPING)
+	if mode == Mode.DEAD or mode == Mode.DOCKED:
+		model.visible = false
+	else:
+		model.visible = not fp
+	engine_glow.visible = not fp
+
 
 func can_dock() -> Station:
 	if mode != Mode.FLIGHT:

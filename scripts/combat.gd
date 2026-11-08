@@ -101,7 +101,7 @@ func explosion(pos: Vector3, scale_f := 1.0) -> void:
 	var tw := create_tween()
 	tw.tween_property(light, "light_energy", 0.0, 0.8)
 	tw.tween_callback(light.queue_free)
-	world.sfx_boom(pos)
+	world.sfx_boom(pos, scale_f > 1.2)
 
 
 func _burst(pos: Vector3, color: Color, amount: int, life: float, vel: float, size: float) -> void:

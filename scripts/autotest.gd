@@ -17,65 +17,89 @@ func _shot(name: String) -> void:
 
 
 func _wait(sec: float) -> void:
-	await get_tree().create_timer(sec).timeout
+	await get_tree().create_timer(sec, true, false, true).timeout
 
 
 func _run() -> void:
+	GameState.reset_game()
+	main.restart_from_save(true)
 	await _wait(1.5)
-	await _shot("01_docked_menu")
+	await _shot("01_menu_contracts")
+	main.menu._select("market")
+	await _wait(0.8)
+	await _shot("02_menu_market")
+	main.menu._select("shipyard")
+	await _wait(0.8)
+	await _shot("03_menu_shipyard")
 	main._launch()
 	GameInput.throttle = 0.5
 	await _wait(2.5)
-	await _shot("02_launch")
-	# turn a bit to see the station
-	GameInput.touch_stick = Vector2(0.6, 0.2)
-	await _wait(1.6)
-	GameInput.touch_stick = Vector2.ZERO
-	await _wait(0.6)
-	await _shot("03_flight")
-	# into the lane at Halcyon Gate
+	await _shot("04_launch")
 	var p: PlayerShip = main.player
 	var f: Dictionary = main.lane.frame(0.0)
-	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"] - f["fwd"] * 100.0)
-	await _wait(0.3)
+	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"] - f["fwd"] * 300.0 + Vector3(0, 40, 0))
+	main.camera.snap()
+	await _wait(0.6)
+	await _shot("05_lane_gate")
 	p.enter_lane()
 	GameInput.throttle = 1.0
 	await _wait(3.0)
-	await _shot("04_lane")
-	GameInput.touch_stick = Vector2(0.8, 0.0)
-	await _wait(1.0)
-	GameInput.touch_stick = Vector2.ZERO
-	await _shot("05_lane_steer")
+	await _shot("06_lane")
 	p.exit_lane()
-	# combat: place near raiders
+	# combat at the beacon
 	var enemies := get_tree().get_nodes_in_group("enemies")
 	if enemies.size() > 0:
 		var e: Node3D = enemies[0]
-		p.global_transform = Transform3D(Basis.looking_at(e.global_position - (e.global_position + Vector3(0, 30, 400)), Vector3.UP), e.global_position + Vector3(0, 30, 400))
+		var pos := e.global_position + Vector3(0, 30, 400)
+		p.global_transform = Transform3D(Basis.looking_at(e.global_position - pos, Vector3.UP), pos)
 		main.camera.snap()
-		GameInput.throttle = 0.3
-		GameInput.touch_fire = true
-		await _wait(1.2)
-		await _shot("06_combat")
-		await _wait(2.0)
-		await _shot("07_combat2")
-		GameInput.touch_fire = false
-	# view of the planet / sun
-	p.global_transform = Transform3D(Basis.looking_at(Vector3(0.55, -0.1, -0.8), Vector3.UP), Vector3(-500, 400, 900))
+		GameInput.set_auto_fire(true)
+		await _wait(1.5)
+		await _shot("07_combat_auto")
+		GameInput.set_auto_fire(false)
+	# stargate
+	var gate: Stargate = main.gates.values()[0]
+	var ap := gate.approach_point() + (gate.approach_point() - gate.global_position).normalized() * 500.0
+	p.global_transform = Transform3D(Basis.looking_at(gate.global_position - ap, Vector3.UP), ap)
 	main.camera.snap()
 	await _wait(1.0)
-	await _shot("08_vista")
-	p.global_transform = Transform3D(Basis.looking_at(Vector3(-0.45, 0.2, -0.85), Vector3.UP), Vector3(-500, 400, 900))
+	await _shot("08_stargate")
+	# maps
+	main._open_map(false)
+	main.star_map._set_tab("system")
+	await _wait(0.6)
+	await _shot("09_map_system")
+	main.star_map._set_tab("galaxy")
+	main.star_map.selected = "elysia"
+	main.star_map._refresh()
+	await _wait(0.4)
+	await _shot("10_map_galaxy")
+	main._close_overlay()
+	main._open_settings()
+	await _wait(0.5)
+	await _shot("11_settings")
+	main._close_overlay()
+	# jump
+	p.global_transform = Transform3D(Basis.looking_at(gate.global_position - gate.approach_point(), Vector3.UP), gate.approach_point())
+	main.camera.snap()
+	await _wait(0.3)
+	main._on_jump_requested(gate.link)
+	await _wait(1.8)
+	await _shot("12_jump_charge")
+	await _wait(3.0)
+	await _shot("13_arrival")
+	# first-person
+	Settings.first_person = true
+	var st: Station = main.stations.values()[1]
+	var sp: Vector3 = st.approach_point() + (st.approach_point() - st.global_position).normalized() * 900.0
+	p.global_transform = Transform3D(Basis.looking_at(st.global_position - sp, Vector3.UP), sp)
 	main.camera.snap()
 	await _wait(1.0)
-	await _shot("09_sun")
-	# docking approach
-	var st: Station = main.stations["verdant"]
-	p.global_transform = Transform3D(Basis.looking_at(st.global_position - st.approach_point(), Vector3.UP), st.approach_point() + (st.approach_point() - st.global_position).normalized() * 150.0)
+	await _shot("14_first_person")
+	Settings.first_person = false
+	await _wait(0.2)
+	p.global_transform = Transform3D(Basis.looking_at(st.global_position - sp, Vector3.UP), sp)
 	main.camera.snap()
 	await _wait(1.0)
-	await _shot("10_verdant")
-	GameInput.queue_action()
-	await _wait(5.5)
-	await _shot("11_docked_verdant")
+	await _shot("15_new_system_station")
 	get_tree().quit()

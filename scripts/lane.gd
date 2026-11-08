@@ -4,9 +4,9 @@ extends Node3D
 ## overtake traffic, and choose where to drop out.
 ## Lane coordinates: s = meters along the curve, offset = Vector2 in the lane frame.
 
-const RADIUS := 32.0
-const TRAFFIC_SIDE := 14.0
-const ENTRY_RANGE := 320.0
+const RADIUS := 64.0
+const TRAFFIC_SIDE := 28.0
+const ENTRY_RANGE := 450.0
 
 var curve := Curve3D.new()
 var length := 0.0
@@ -77,7 +77,7 @@ func next_exit(s: float, dir: int) -> Dictionary:
 func _build_tube() -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var sides := 12
+	var sides := 16
 	var step := 25.0
 	var n := int(ceil(length / step))
 	var rings := []
@@ -113,7 +113,7 @@ func _build_tube() -> void:
 		var f0 := frame(i * step)
 		var f1 := frame(minf((i + 1) * step, length))
 		for ax in [f0["right"], f0["up"]]:
-			var w: Vector3 = ax * 1.2
+			var w: Vector3 = ax * 1.6
 			var a0: Vector3 = f0["origin"] - w
 			var a1: Vector3 = f0["origin"] + w
 			var b0: Vector3 = f1["origin"] - w
@@ -149,7 +149,7 @@ func _spawn_traffic() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 42
 	for dir in [1, -1]:
-		var count := 7
+		var count := 8
 		for i in count:
 			var node := MeshInstance3D.new()
 			node.mesh = Models.freighter(rng.randi())
@@ -158,7 +158,7 @@ func _spawn_traffic() -> void:
 			traffic.append({
 				"node": node, "s": s, "dir": dir,
 				"speed": rng.randf_range(220.0, 300.0),
-				"offset": Vector2(TRAFFIC_SIDE * dir + rng.randf_range(-3, 3), rng.randf_range(-6, 6)),
+				"offset": Vector2(TRAFFIC_SIDE * dir + rng.randf_range(-8, 8), rng.randf_range(-14, 14)),
 			})
 
 

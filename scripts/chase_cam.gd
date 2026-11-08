@@ -6,6 +6,7 @@ var target: PlayerShip
 var shake_amt := 0.0
 var orbit := 0.0   # slow orbit used while docked
 var smooth_basis := Basis.IDENTITY
+var warp := 0.0   # 0..1, stretches FOV during stargate jumps
 
 
 func _ready() -> void:
@@ -37,6 +38,14 @@ func _physics_process(delta: float) -> void:
 		global_basis = global_basis.slerp(want_d.orthonormalized(), 1.0 - exp(-delta * 3.0)).orthonormalized()
 		smooth_basis = global_basis
 		return
+	var fp := Settings.first_person and target.mode != PlayerShip.Mode.DOCKING
+	if fp:
+		# cockpit view: locked to the ship with a touch of rotational smoothing
+		smooth_basis = smooth_basis.slerp(t.basis.orthonormalized(), 1.0 - exp(-delta * 20.0)).orthonormalized()
+		global_position = t * Vector3(0, 0.75, -1.4)
+		global_basis = smooth_basis
+		_fov_and_shake(delta, in_lane)
+		return
 	# Rotational lag only: the camera orbits the ship with a smoothed basis, so it
 	# never falls behind at lane speeds but still swings nicely in turns.
 	var k := 7.0 if not in_lane else 5.0
@@ -47,8 +56,12 @@ func _physics_process(delta: float) -> void:
 	var look_at_pt2 := t.origin + smooth_basis * Vector3(0, 1.2, 0) + t.basis * Vector3(0, 0, -40.0)
 	global_basis = Transform3D().looking_at(look_at_pt2 - global_position, smooth_basis.y).basis
 
+	_fov_and_shake(delta, in_lane)
+
+
+func _fov_and_shake(delta: float, in_lane: bool) -> void:
 	var spd_ratio := clampf(target.speed / target.top_speed(), 0.0, 6.0)
-	var want_fov := 68.0 + minf(spd_ratio, 2.2) * 6.0 + (10.0 if in_lane else 0.0)
+	var want_fov := 68.0 + minf(spd_ratio, 2.2) * 6.0 + (10.0 if in_lane else 0.0) + warp * 55.0
 	fov = lerpf(fov, want_fov, 1.0 - exp(-delta * 2.5))
 
 	if shake_amt > 0.001:

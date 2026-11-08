@@ -2,7 +2,7 @@ class_name Models
 extends RefCounted
 ## Procedural low-poly models. Ships point down -Z (Godot forward).
 
-const WHITE := Color(0.86, 0.89, 0.93)
+const WHITE := Color(0.78, 0.81, 0.86)
 const STEEL := Color(0.42, 0.46, 0.53)
 const DARK := Color(0.16, 0.17, 0.21)
 const CYAN := Color(0.25, 0.9, 1.0)
@@ -147,8 +147,32 @@ static func station(accent: Color, variant: int) -> Dictionary:
 			hub.xform = Transform3D(Basis.IDENTITY, p)
 			hub.loft("dim", [Vector4(-12, 1, 1, 0), Vector4(-8, 10, 10, 0), Vector4(8, 10, 10, 0), Vector4(12, 1, 1, 0)], 8, Color(0.35, 0.8, 0.45))
 			hub.xform = Transform3D.IDENTITY
+	if variant == 2:
+		# industrial: container stacks, crane arms and a smelter block
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 77
+		for k in 10:
+			var a := TAU * k / 10.0
+			var r := 36.0 + rng.randf() * 10.0
+			hub.box("hull", Vector3(cos(a) * r, sin(a) * r, 30 + rng.randf() * 30), Vector3(10, 10, 22),
+				[Color(0.7, 0.35, 0.2), Color(0.3, 0.4, 0.5), Color(0.6, 0.55, 0.3), STEEL][k % 4])
+		for sx in [-1.0, 1.0]:
+			hub.box("hull", Vector3(sx * 60, 0, -20), Vector3(70, 5, 5), STEEL)
+			hub.box("hull", Vector3(sx * 95, -12, -20), Vector3(5, 28, 5), STEEL)
+			hub.box("glow", Vector3(sx * 95, -27, -20), Vector3(3, 2, 3), Color(1.0, 0.6, 0.2))
+		hub.box("hull", Vector3(0, -48, 40), Vector3(40, 30, 50), DARK)
+		hub.box("glow", Vector3(0, -48, 66), Vector3(30, 4, 0.5), Color(1.0, 0.45, 0.15))
+	if variant == 3:
+		# spire: tall needle with a second, counter-rotating ring segment
+		hub.cyl("hull", Vector3(0, 0, 130), Vector3(0, 0, 260), 6, 1.5, 6, WHITE)
+		hub.box("glow", Vector3(0, 0, 262), Vector3(3, 3, 3), accent)
+		hub.torus("hull", Vector3(0, 0, 190), 40, 3.5, 24, 6, STEEL, Basis(Vector3.RIGHT, PI / 2.0))
+		hub.torus("glow", Vector3(0, 0, 190), 44, 0.6, 24, 3, accent, Basis(Vector3.RIGHT, PI / 2.0))
+		for k in 4:
+			var a := TAU * k / 4.0 + PI / 4.0
+			hub.cyl("hull", Vector3(cos(a) * 6, sin(a) * 6, 190), Vector3(cos(a) * 38, sin(a) * 38, 190), 1.5, 1.5, 4, STEEL)
 	# habitat ring (rotates around Z)
-	var ring_r := 95.0 if variant == 0 else 80.0
+	var ring_r: float = [95.0, 80.0, 105.0, 70.0][variant]
 	ring.xform = Transform3D(Basis(Vector3.RIGHT, PI / 2.0), Vector3.ZERO)
 	ring.torus("hull", Vector3.ZERO, ring_r, 9.0, 32, 6, WHITE, Basis.IDENTITY, STEEL)
 	ring.torus("dim", Vector3.ZERO, ring_r + 9.2, 0.6, 32, 3, Color(1.0, 0.9, 0.7))
@@ -185,3 +209,25 @@ static func beacon(color: Color) -> ArrayMesh:
 	b.box("glow", Vector3(0, 32, 0), Vector3(3, 3, 3), color)
 	b.box("glow", Vector3(0, -32, 0), Vector3(3, 3, 3), color)
 	return b.build(MeshBuilder.default_materials())
+
+
+## Stargate: a huge segmented ring with an energy membrane, facing local -Z.
+static func stargate(color: Color) -> Dictionary:
+	var b := MeshBuilder.new()
+	b.xform = Transform3D(Basis(Vector3.RIGHT, PI / 2.0), Vector3.ZERO)
+	b.torus("hull", Vector3.ZERO, 150, 12, 48, 8, STEEL, Basis.IDENTITY, DARK)
+	b.torus("glow", Vector3.ZERO, 136, 2.0, 48, 4, color)
+	b.torus("dim", Vector3.ZERO, 165, 1.2, 48, 4, color)
+	b.xform = Transform3D.IDENTITY
+	for k in 8:
+		var a := TAU * k / 8.0
+		var d := Vector3(cos(a), sin(a), 0)
+		var bs := Basis(Vector3.FORWARD, a)
+		b.box("hull", d * 158.0, Vector3(40, 26, 40), WHITE, bs)
+		b.box("hull", d * 180.0, Vector3(14, 30, 22), STEEL, bs)
+		b.box("glow", d * 196.0, Vector3(5, 5, 5), color)
+		b.box("glow", d * 158.0 + Vector3(0, 0, -20.5), Vector3(26, 3, 0.6), color, bs)
+	# support pylons
+	for sx in [-1.0, 1.0]:
+		b.cyl("hull", Vector3(sx * 170, -60, 0), Vector3(sx * 230, -260, 40), 8, 5, 6, STEEL)
+	return {"frame": b.build(MeshBuilder.default_materials())}

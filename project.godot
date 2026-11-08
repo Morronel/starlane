@@ -13,6 +13,7 @@ config/icon="res://icon.svg"
 
 GameState="*res://scripts/game_state.gd"
 GameInput="*res://scripts/game_input.gd"
+Settings="*res://scripts/settings.gd"
 
 [display]
 

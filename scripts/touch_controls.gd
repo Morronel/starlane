@@ -15,6 +15,10 @@ var _boost_touch := -1
 var _throttle_touch := -1
 var _roll_touches := {}   # index -> -1 / +1
 var _action_flash := 0.0
+var _last_fire_tap := -10000
+
+signal map_tapped
+signal settings_tapped
 
 const STICK_R := 95.0
 const ACCENT := Color(0.55, 0.85, 1.0)
@@ -31,6 +35,8 @@ func _roll_c(side: int) -> Vector2: return Vector2(110 + (side + 1) * 75, size.y
 func _action_rect() -> Rect2: return Rect2(size.x - 330, size.y * 0.36, 250, 74)
 func _throttle_rect() -> Rect2: return Rect2(size.x - 72, 110, 46, size.y - 390)
 func _stick_home() -> Vector2: return Vector2(185, size.y - 165)
+func _map_rect() -> Rect2: return Rect2(size.x * 0.5 - 132, 12, 120, 50)
+func _gear_rect() -> Rect2: return Rect2(size.x * 0.5 + 12, 12, 120, 50)
 
 
 func _input(event: InputEvent) -> void:
@@ -43,8 +49,18 @@ func _input(event: InputEvent) -> void:
 			if _action_rect().has_point(p) and action_label != "":
 				GameInput.queue_action()
 				_action_flash = 1.0
+			elif _map_rect().has_point(p):
+				map_tapped.emit()
+			elif _gear_rect().has_point(p):
+				settings_tapped.emit()
 			elif p.distance_to(_fire_c()) < 100.0:
 				_fire_touch = idx
+				var now := Time.get_ticks_msec()
+				if now - _last_fire_tap < 320:
+					GameInput.set_auto_fire(not GameInput.auto_fire)
+					_last_fire_tap = -10000
+				else:
+					_last_fire_tap = now
 			elif p.distance_to(_boost_c()) < 60.0:
 				_boost_touch = idx
 			elif _throttle_rect().grow(26).has_point(p):
@@ -118,7 +134,7 @@ func _process(delta: float) -> void:
 
 
 func _draw() -> void:
-	var font := ThemeDB.fallback_font
+	var font := UiKit.display(700)
 	var faint := Color(ACCENT, 0.18)
 	var line := Color(ACCENT, 0.45)
 	# stick
@@ -143,7 +159,22 @@ func _draw() -> void:
 	var firing := _fire_touch >= 0
 	draw_circle(fc, 84, Color(1.0, 0.35, 0.3, 0.35 if firing else 0.18))
 	draw_arc(fc, 84, 0, TAU, 48, Color(1.0, 0.5, 0.45, 0.7), 3.0, true)
-	_text(font, fc, "FIRE", 24, Color(1, 1, 1, 0.9))
+	_text(font, fc + Vector2(0, -8 if GameInput.auto_fire else 0), "FIRE", 24, Color(1, 1, 1, 0.9))
+	if GameInput.auto_fire:
+		var a0 := Time.get_ticks_msec() * 0.004
+		for k in 3:
+			draw_arc(fc, 94, a0 + k * TAU / 3.0, a0 + k * TAU / 3.0 + 1.2, 16, Color(1.0, 0.85, 0.4, 0.95), 4.0, true)
+		_text(font, fc + Vector2(0, 22), "AUTO", 16, Color(1.0, 0.85, 0.4))
+	else:
+		_text(font, fc + Vector2(0, 112), "double-tap: auto", 12, Color(1, 1, 1, 0.35))
+	# map + settings
+	for item in [[_map_rect(), "map", "MAP"], [_gear_rect(), "gear", ""]]:
+		var r: Rect2 = item[0]
+		draw_rect(r, Color(0.03, 0.06, 0.1, 0.55))
+		draw_rect(r, line, false, 1.5)
+		UiKit.icon(self, item[1], r.get_center() - Vector2(22 if item[2] != "" else 0, 0), 30, ACCENT, 2.0)
+		if item[2] != "":
+			_text(font, r.get_center() + Vector2(18, 0), item[2], 16, Color(1, 1, 1, 0.85))
 	# boost
 	var bc := _boost_c()
 	draw_circle(bc, 52, Color(ACCENT, 0.35 if _boost_touch >= 0 else 0.15))
