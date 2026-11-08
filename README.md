@@ -13,6 +13,7 @@ The loop is short: dock, trade or take a contract, ride the space lane, fight ra
 - **Outfit:** primary weapons (pulse lasers, ion repeater, scatter blaster, plasma lance, rail driver), secondary launchers with homing missiles and torpedoes, and utility gear (shields, armor, engines, cargo pods, tractor beam, nano-repair, afterburner, targeting computer, jump capacitors). Each ship has its own slot layout, and every station stocks different gear.
 - **Workshop:** salvage parts (scrap, circuits, plasma coils, lattice crystal, void shards) drop from raiders and drift in asteroid fields. Blueprints turn them into gear, including unique items like the Hellfire Repeater, Aegis Lattice and Ghost Drive. Rare blueprints drop from elite raiders or are sold at research stations.
 - **Combat:** raiders with attack runs and elites in mission waves, aim assist with a lead marker, homing missiles, and auto-attack (double-tap FIRE). Tense combat music kicks in while you're fighting.
+- **Cockpit view** (Settings → Camera → 1ST PERSON). Every hull has its own 3D cabin: the Sparrow's bubble canopy, the Wren's panoramic glass, the Kestrel's angular fighter frame with a head-up glass, the Mule's freighter bridge with a steering wheel and overhead panel, the Corsair's armoured slit and the Seraph's gold-trimmed canopy with a hologram radar. The yoke turns with your stick and roll (and with the autopilot), the throttle lever follows the throttle, and live screens show radar, ship status, nav, weapons or cargo. Indicator lights blink, the cabin lights up when you fire, and it flashes red when you are hit or the hull runs low.
 - **Station screen** with drag-anywhere kinetic scrolling (a drag never presses the button under your finger), animated cards, rolling credits, popups and sparkles.
 - **Progress is saved** automatically on dock, launch and jump. Saves from 0.2 carry over your credits, cargo, contracts and location.
 
@@ -51,5 +52,6 @@ For release signing, set `GODOT_ANDROID_KEYSTORE_RELEASE_PATH`, `_USER` and `_PA
 
 ## Dev tools
 
-- `godot --headless -- --simtest` runs a scripted gameplay check. It covers autopilot via the lane to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, an automatic lane merge, death and respawn, and save/load.
+- `godot --headless -- --simtest` runs a scripted gameplay check. It covers autopilot via the lane to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, the cockpit view, an automatic lane merge, death and respawn, and save/load.
 - `godot -- --autotest=/some/dir` saves a set of screenshots from a scripted flight.
+- `godot -- --cockpits=/some/dir` saves one cockpit screenshot per ship (set `COCKPITS=mule,seraph` to pick hulls).
