@@ -261,7 +261,7 @@ func _run() -> void:
 	var s_mid: float = main.lane.length * 0.3
 	var f: Dictionary = main.lane.frame(s_mid)
 	var start: Vector3 = f["origin"] + f["right"] * (SpaceLane.RADIUS + 120.0)
-	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 300.0 - start).normalized(), Vector3.UP), start)
+	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 700.0 - start).normalized(), Vector3.UP), start)
 	p._lane_was_inside = false
 	p._merge_cd = 0.0
 	GameInput.throttle = 1.0
@@ -282,5 +282,18 @@ func _run() -> void:
 	GameState.save_game()
 	if not GameState.load_game() or GameState.ship != "wren":
 		return _fail("save did not load")
+	# manual save slots: save, change things, load back, delete
+	GameState.save_slot(2)
+	var cr_saved := GameState.credits
+	GameState.credits += 12345
+	GameState.ship = "sparrow"
+	if GameState.slot_info(2).is_empty():
+		return _fail("slot 2 empty after saving")
+	if not GameState.load_slot(2) or GameState.credits != cr_saved or GameState.ship != "wren":
+		return _fail("slot 2 did not restore the game")
+	GameState.delete_slot(2)
+	if not GameState.slot_info(2).is_empty():
+		return _fail("slot 2 not deleted")
+	print("save slots ok: ", GameState.slot_info(0))
 	print("SIMTEST PASS")
 	get_tree().quit(0)

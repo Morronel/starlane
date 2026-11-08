@@ -381,7 +381,7 @@ func _lane_ride(delta: float) -> void:
 	var s_prev := lane_s
 	lane_s += lane_dir * lane_speed * delta
 	# lane right flips when travelling backwards
-	lane_offset += Vector2(steer.x * lane_dir, steer.y) * 140.0 * delta
+	lane_offset += Vector2(steer.x * lane_dir, steer.y) * 230.0 * delta
 	lane_offset = lane_offset.limit_length(SpaceLane.RADIUS - 12.0)
 
 	if autopilot and ap_lane_exit_s >= 0.0 and (ap_lane_exit_s - lane_s) * lane_dir < lane_speed * 0.6:

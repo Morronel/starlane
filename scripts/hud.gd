@@ -62,6 +62,8 @@ func _draw() -> void:
 		return
 
 	_bars(font, p)
+	if Settings.first_person:
+		_glass_hud(p)
 	_destination(font, p, cam)
 	_nav(font, p, cam)
 
@@ -83,6 +85,50 @@ func _draw() -> void:
 	if p.mode == PlayerShip.Mode.DOCKING:
 		_text(font, Vector2(center.x, size.y * 0.3), "AUTOPILOT DOCKING", 28, Color(0.5, 1.0, 0.7))
 
+
+
+## Head-up readout projected on the canopy in 1st person, so every hull
+## (including the starter Sparrow) has speed, throttle, shield and hull right
+## next to the crosshair, whatever its dashboard screens show.
+func _glass_hud(p: PlayerShip) -> void:
+	var c := size * 0.5
+	var g := Color(0.45, 1.0, 0.7, 0.85)
+	var dim := Color(g, 0.35)
+	var f := UiKit.display(700, 1)
+	# speed box, left of the crosshair
+	var sx := c.x - 190.0
+	var spd := str(int(p.speed))
+	draw_rect(Rect2(sx - 62, c.y - 22, 124, 44), dim, false, 1.5)
+	UiKit.text_c(self, f, Vector2(sx, c.y - 1), spd, 26, g, false)
+	UiKit.text_c(self, UiKit.display(600), Vector2(sx, c.y + 34), "M/S", 12, dim, false)
+	# throttle tape beside it
+	var tx := sx - 80.0
+	draw_rect(Rect2(tx, c.y - 40, 6, 80), dim, false, 1.0)
+	var t := GameInput.throttle
+	draw_rect(Rect2(tx, c.y + 40 - 80 * t, 6, 80 * t), g)
+	# shield / hull arcs, right of the crosshair
+	var hx := c.x + 190.0
+	var ms := GameState.max_shield()
+	var sh := p.shield / ms if ms > 0.0 else 0.0
+	var hu := GameState.hull / GameState.max_hull()
+	var hull_col := g if hu > 0.3 else Color(1.0, 0.35, 0.3, 0.9)
+	draw_arc(Vector2(hx, c.y), 30, -PI * 0.75, PI * 0.75, 32, dim, 3.0, true)
+	if sh > 0.0:
+		draw_arc(Vector2(hx, c.y), 30, -PI * 0.75, -PI * 0.75 + PI * 1.5 * sh, 32, Color(0.45, 0.85, 1.0, 0.9), 3.0, true)
+	draw_arc(Vector2(hx, c.y), 22, -PI * 0.75, PI * 0.75, 32, dim, 3.0, true)
+	draw_arc(Vector2(hx, c.y), 22, -PI * 0.75, -PI * 0.75 + PI * 1.5 * hu, 32, hull_col, 3.0, true)
+	UiKit.text_c(self, f, Vector2(hx, c.y), "%d" % int(hu * 100.0), 14, hull_col, false)
+	UiKit.text_c(self, UiKit.display(600), Vector2(hx, c.y + 46), "SHD · HULL", 11, dim, false)
+	# mode flags under the crosshair
+	var flag := ""
+	if p.mode == PlayerShip.Mode.LANE:
+		flag = "LANE"
+	if p.autopilot:
+		flag = "AUTOPILOT" if flag == "" else flag + "  ·  AUTOPILOT"
+	if p.boost_energy < 0.99 and GameInput.boost:
+		flag = "BOOST" if flag == "" else flag + "  ·  BOOST"
+	if flag != "":
+		UiKit.text_c(self, f, Vector2(c.x, c.y + 70), flag, 13, g, false)
 
 
 func _bars(font: Font, p: PlayerShip) -> void:

@@ -188,6 +188,7 @@ func _build_system(id: String, sysd: Dictionary) -> void:
 	lane = SpaceLane.new()
 	world_root.add_child(lane)
 	lane.build(pts, exits)
+	lane.set_palette(Galaxy.SYSTEMS[GameState.system_id]["sky"])
 
 	var bea := MeshInstance3D.new()
 	bea.mesh = Models.beacon(Color(0.7, 0.5, 1.0))
@@ -383,6 +384,8 @@ func _close_overlay() -> void:
 	star_map.visible = false
 	settings_panel.visible = false
 	get_tree().paused = false
+	if menu.visible:
+		menu._rebuild()   # credits/ship may have changed in the dev menu
 
 
 func shake(a: float) -> void:

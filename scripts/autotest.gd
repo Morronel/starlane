@@ -162,5 +162,38 @@ func _run() -> void:
 	main.camera.snap()
 	await _wait(1.0)
 	await _shot("15_first_person")
+	# fresh pilot in the starter Sparrow, 1st person, flying out from the station
+	GameState.reset_game()
+	main.restart_from_save(true)
+	await _wait(0.6)
+	main._launch()
+	GameInput.throttle = 0.6
+	await _wait(2.5)
+	await _shot("16_fp_sparrow_fresh")
+	# lane from inside, 1st person
+	p.enter_lane(1, true)
+	GameInput.throttle = 1.0
+	await _wait(2.5)
+	await _shot("17_fp_lane")
 	Settings.first_person = false
+	await _wait(1.0)
+	await _shot("18_lane_3rd")
+	p.exit_lane()
+	# settings, saves and dev menu
+	Settings.dev_mode = true
+	GameState.save_slot(1)
+	main._open_settings()
+	await _wait(0.5)
+	await _shot("19_settings")
+	main.settings_panel.saves.open()
+	await _wait(0.5)
+	await _shot("20_saves")
+	main.settings_panel.saves.visible = false
+	main.settings_panel.dev.open()
+	await _wait(0.5)
+	await _shot("21_dev_menu")
+	main.settings_panel.dev.visible = false
+	main._close_overlay()
+	Settings.dev_mode = false
+	GameState.delete_slot(1)
 	get_tree().quit()

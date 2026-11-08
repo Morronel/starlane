@@ -570,23 +570,72 @@ func on_player_destroyed() -> void:
 
 # --- save / load -------------------------------------------------------------
 
-func save_game() -> void:
+const SLOT_COUNT := 3
+
+
+func slot_path(slot: int) -> String:
+	## slot 0 is the autosave; 1..SLOT_COUNT are manual slots
+	return SAVE_PATH if slot == 0 else "user://slot_%d.json" % slot
+
+
+func save_game(path := SAVE_PATH) -> void:
 	var data := {
 		"v": 3, "credits": credits, "cargo": cargo, "hull": hull, "kills": kills,
 		"last_station": last_station, "system_id": system_id, "jump_charges": jump_charges,
 		"visited": visited, "missions": missions, "mission_counter": mission_counter,
 		"ship": ship, "equip": equip, "storage": storage, "ammo": ammo, "parts": parts,
 		"blueprints": blueprints, "destination": destination,
+		"saved_at": int(Time.get_unix_time_from_system()),
 	}
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(data))
 
 
-func load_game() -> bool:
-	if not FileAccess.file_exists(SAVE_PATH):
+func save_slot(slot: int) -> void:
+	save_game(slot_path(slot))
+
+
+## Load a slot and make it the running game (the autosave follows it).
+func load_slot(slot: int) -> bool:
+	if not load_game(slot_path(slot)):
 		return false
-	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if slot != 0:
+		save_game()
+	return true
+
+
+func delete_slot(slot: int) -> void:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(slot_path(slot)))
+
+
+## Summary of a save for the slot list, or {} when the slot is empty/unreadable.
+func slot_info(slot: int) -> Dictionary:
+	var path := slot_path(slot)
+	if not FileAccess.file_exists(path):
+		return {}
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	var data = JSON.parse_string(f.get_as_text())
+	if typeof(data) != TYPE_DICTIONARY or int(data.get("v", 0)) < 2:
+		return {}
+	var sid: String = data.get("last_station", "halcyon")
+	var sh: String = data.get("ship", "sparrow")
+	var when := int(data.get("saved_at", 0))
+	if when == 0:
+		when = int(FileAccess.get_modified_time(path))
+	return {
+		"credits": int(data.get("credits", 0)), "kills": int(data.get("kills", 0)),
+		"station": Galaxy.station_name(sid), "system": Galaxy.SYSTEMS.get(Galaxy.system_of(sid), {}).get("name", ""),
+		"ship": Items.SHIPS.get(sh, Items.SHIPS["sparrow"])["name"], "saved_at": when,
+	}
+
+
+func load_game(path := SAVE_PATH) -> bool:
+	if not FileAccess.file_exists(path):
+		return false
+	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return false
 	var data = JSON.parse_string(f.get_as_text())
