@@ -77,8 +77,8 @@ func _fov_and_shake(delta: float, in_lane: bool) -> void:
 	else:
 		h_offset = 0.0
 		v_offset = 0.0
-	# subtle constant rumble in the lane
-	if in_lane:
+	# subtle constant rumble in the lane (3rd person only: in the cockpit it reads as a tremor)
+	if in_lane and near >= 0.1:
 		h_offset += randf_range(-1, 1) * 0.05 * amp / 0.6
 		v_offset += randf_range(-1, 1) * 0.05 * amp / 0.6
 

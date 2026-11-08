@@ -18,6 +18,8 @@ var _alarm: OmniLight3D
 var _viewports: Array = []
 var _yoke_in := Vector3.ZERO     # smoothed pitch, yaw, roll
 var _sway := Vector3.ZERO
+var _accel_lag := 0.0
+var _last_speed := 0.0
 var _flash := 0.0
 var _last_cd: Array = []
 var _last_hull := -1.0
@@ -596,11 +598,13 @@ func _animate(delta: float) -> void:
 	# head sway: the cabin lags a hair behind fast turns and shakes under boost
 	var sway_t := Vector3(-player.ang_vel.x * 0.012, -player.ang_vel.y * 0.012, -player.ang_vel.z * 0.01)
 	_sway = _sway.lerp(sway_t, 1.0 - exp(-delta * 6.0))
-	var buzz := Vector3.ZERO
-	if player.speed > player.top_speed() * 1.05 or player.mode == PlayerShip.Mode.LANE:
-		buzz = Vector3(randf_range(-1, 1), randf_range(-1, 1), 0) * 0.0015
+	# no random shake: the cabin only eases back a few millimetres under
+	# acceleration and drifts forward when braking, all low-pass filtered
+	var acc := (player.speed - _last_speed) / maxf(delta, 0.001)
+	_last_speed = player.speed
+	_accel_lag = lerpf(_accel_lag, clampf(acc * 0.000012, -0.008, 0.008), 1.0 - exp(-delta * 2.5))
 	rotation = Vector3(_sway.x, _sway.y, _sway.z)
-	position = buzz + Vector3(0, 0, -_sway.x * 0.02)
+	position = Vector3(0, 0, _accel_lag - _sway.x * 0.02)
 	# muzzle flash, hits, alarm
 	var cds: Array = player.weapon_cd
 	for i in cds.size():

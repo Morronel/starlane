@@ -7,6 +7,7 @@ signal closed
 var world: Node
 var _seg := {}   # key -> [btnA, btnB]
 var _dev_btn: Button
+var _menu_btn: Button
 var saves: SavePanel
 var dev: DevPanel
 
@@ -62,16 +63,21 @@ func _ready() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 16)
 	v.add_child(row)
-	var saves_btn := UiKit.button("SAVES", Vector2(170, 58), 18)
+	_menu_btn = UiKit.button("MAIN MENU", Vector2(170, 58), 15)
+	_menu_btn.pressed.connect(func():
+		closed.emit()
+		world.show_title())
+	row.add_child(_menu_btn)
+	var saves_btn := UiKit.button("SAVES", Vector2(140, 58), 18)
 	saves_btn.pressed.connect(func(): saves.open())
 	row.add_child(saves_btn)
-	_dev_btn = UiKit.button("DEV MENU", Vector2(190, 58), 16)
+	_dev_btn = UiKit.button("DEV MENU", Vector2(160, 58), 15)
 	_dev_btn.pressed.connect(func(): dev.open())
 	row.add_child(_dev_btn)
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(sp)
-	var close := UiKit.button("DONE", Vector2(200, 58), 20)
+	var close := UiKit.button("DONE", Vector2(150, 58), 20)
 	close.pressed.connect(func():
 		world.sfx.ui("click")
 		closed.emit())
@@ -151,6 +157,7 @@ func _sync() -> void:
 		_seg[k][0].button_pressed = not on
 		_seg[k][1].button_pressed = on
 	_dev_btn.visible = Settings.dev_mode
+	_menu_btn.visible = not world.title.visible
 
 
 func _on_loaded() -> void:

@@ -63,8 +63,10 @@ func build(points: Array, exit_defs: Array, mats: Dictionary, traffic_meshes: Ar
 func frame(s: float) -> Dictionary:
 	s = clampf(s, 0.0, length)
 	var p := curve.sample_baked(s, true)
-	var a := curve.sample_baked(clampf(s - 5.0, 0.0, length), true)
-	var b := curve.sample_baked(clampf(s + 5.0, 0.0, length), true)
+	# a wide tangent baseline keeps the frame (and anything offset far from the
+	# axis, like a ship near the wall) from wobbling between baked points
+	var a := curve.sample_baked(clampf(s - 25.0, 0.0, length), true)
+	var b := curve.sample_baked(clampf(s + 25.0, 0.0, length), true)
 	var fwd := (b - a).normalized()
 	var right := fwd.cross(Vector3.UP).normalized()
 	var up := right.cross(fwd).normalized()
