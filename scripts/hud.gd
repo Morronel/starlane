@@ -285,6 +285,7 @@ func _target(font: Font, p: PlayerShip, cam: Camera3D) -> void:
 
 
 const DEST_COL := Color(1.0, 0.82, 0.35)
+const GPS_COL := Color(0.78, 0.58, 1.0)   # route colour: GPS panel, the lane to hold, where to join
 
 
 func _destination(font: Font, p: PlayerShip, cam: Camera3D) -> void:
@@ -294,10 +295,70 @@ func _destination(font: Font, p: PlayerShip, cam: Camera3D) -> void:
 	var dist: float = p.global_position.distance_to(t["pos"])
 	if p.mode != PlayerShip.Mode.LANE:
 		_marker(font, cam, t["pos"], "DEST", DEST_COL, p, "dest")
-	var tag := "AUTOPILOT" if p.autopilot else "DESTINATION"
-	var line := "%s  ·  %s  ·  %s" % [tag, t["label"], _fmt_dist(dist)]
-	var col := UiKit.GOOD if p.autopilot else DEST_COL
-	_text(UiKit.display(600), Vector2(size.x * 0.5, 82), line, 15, Color(col, 0.95))
+	var g: Dictionary = world.gps_info()
+	if g.is_empty():
+		var line := "%s  ·  %s  ·  %s" % ["AUTOPILOT" if p.autopilot else "DESTINATION", t["label"], _fmt_dist(dist)]
+		_text(UiKit.display(600), Vector2(size.x * 0.5, 82), line, 15, Color(UiKit.GOOD if p.autopilot else DEST_COL, 0.95))
+		return
+	if g.has("join") and p.mode != PlayerShip.Mode.LANE:
+		_marker(font, cam, g["join"], "JOIN", GPS_COL, p, "dest")
+	_gps_panel(font, p, g, t, dist)
+
+
+## GPS strip at the top: the next manoeuvre with a big arrow, how far it is,
+## and the step after it.
+func _gps_panel(font: Font, p: PlayerShip, g: Dictionary, t: Dictionary, dist: float) -> void:
+	var w := 600.0
+	var r := Rect2(size.x * 0.5 - w * 0.5, 72, w, 66)
+	var col := UiKit.GOOD if p.autopilot else GPS_COL
+	draw_rect(r, Color(0.02, 0.05, 0.09, 0.72))
+	draw_rect(r, Color(col, 0.55), false, 1.5)
+	draw_rect(Rect2(r.position, Vector2(70, r.size.y)), Color(col, 0.16))
+	_gps_icon(r.position + Vector2(35, 33), g["icon"], col)
+	var f := UiKit.display(700, 1)
+	var ds: String = _fmt_dist(g["dist"]) if g["dist"] > 1.0 else "NOW"
+	var dw := f.get_string_size(ds, HORIZONTAL_ALIGNMENT_LEFT, -1, 24).x
+	draw_string(f, Vector2(r.end.x - 14 - dw, r.position.y + 30), ds, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color(1, 1, 1, 0.95))
+	var tx := r.position.x + 84
+	var max_w := r.size.x - 84 - dw - 28
+	draw_string(font, Vector2(tx, r.position.y + 28), g["text"], HORIZONTAL_ALIGNMENT_LEFT, max_w, 18, Color(1, 1, 1, 0.95))
+	var sub: String = g["then"]
+	var tail := "%s%s  ·  %s" % ["AUTOPILOT  ·  " if p.autopilot else "", t["label"], _fmt_dist(dist)]
+	var tf := UiKit.display(600)
+	var tw := minf(tf.get_string_size(tail, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x, (r.end.x - tx) * 0.5)
+	draw_string(tf, Vector2(tx, r.position.y + 52), tail, HORIZONTAL_ALIGNMENT_LEFT, tw, 12, Color(col, 0.9))
+	if sub != "":
+		var sx := tx + tw + 18
+		draw_string(font, Vector2(sx, r.position.y + 52), sub, HORIZONTAL_ALIGNMENT_LEFT, r.end.x - 14 - sx, 13, Color(1, 1, 1, 0.55))
+
+
+func _gps_icon(c: Vector2, icon: String, col: Color) -> void:
+	var w := 6.0
+	match icon:
+		"left", "right":
+			var sx := -1.0 if icon == "left" else 1.0
+			var a := c + Vector2(-sx * 6, 20)
+			var b := c + Vector2(-sx * 6, -2)
+			var tip := c + Vector2(sx * 14, -16)
+			draw_polyline(PackedVector2Array([a, b, tip]), col, w, true)
+			var d := (tip - b).normalized()
+			var pp := Vector2(-d.y, d.x)
+			draw_colored_polygon(PackedVector2Array([tip + d * 10, tip + pp * 9, tip - pp * 9]), col)
+		"straight", "join":
+			draw_line(c + Vector2(0, 20), c + Vector2(0, -8), col, w, true)
+			draw_colored_polygon(PackedVector2Array([c + Vector2(0, -22), c + Vector2(-10, -8), c + Vector2(10, -8)]), col)
+			if icon == "join":
+				draw_arc(c, 24, 0, TAU, 28, Color(col, 0.6), 2.0, true)
+		"exit":
+			draw_line(c + Vector2(-8, 20), c + Vector2(-8, -4), col, w, true)
+			draw_line(c + Vector2(-8, -4), c + Vector2(10, -16), col, w, true)
+			draw_colored_polygon(PackedVector2Array([c + Vector2(18, -22), c + Vector2(4, -20), c + Vector2(12, -8)]), col)
+		"stop":
+			draw_arc(c, 18, 0, TAU, 28, col, 4.0, true)
+			draw_rect(Rect2(c - Vector2(7, 7), Vector2(14, 14)), col)
+		_:
+			draw_circle(c, 7, col)
+			draw_arc(c, 20, 0, TAU, 28, Color(col, 0.6), 2.0, true)
 
 
 func _lane_info(font: Font, p: PlayerShip) -> void:
@@ -307,7 +368,7 @@ func _lane_info(font: Font, p: PlayerShip) -> void:
 	var hw := lane.kind == "highway"
 	var col := HWY if hw else ROAD
 	var sp: Dictionary = lane.spec()
-	var y := 122.0
+	var y := 162.0 if not world.gps.is_empty() else 122.0
 	var cx := size.x * 0.5
 	var end_s: float = lane.length if p.lane_dir > 0 else 0.0
 	var where: String = world.net.node_name(world.net.end_node(lane, p.lane_dir))
@@ -325,42 +386,61 @@ func _lane_info(font: Font, p: PlayerShip) -> void:
 		draw_line(Vector2(a + 2, yy), Vector2(b - 2, yy), Color(t[2], 0.45), 4.0)
 	var px: float = x0 + w * sqrt(clampf(p.speed, 0.0, vmax) / vmax)
 	draw_colored_polygon(PackedVector2Array([Vector2(px, yy - 4), Vector2(px - 6, yy - 14), Vector2(px + 6, yy - 14)]), Color(1, 0.95, 0.7))
-	_junction(font, p, Vector2(170.0, 190.0))
+	_junction(font, p, Vector2(170.0, 200.0))
 	_drift_gauge(p, lane, Vector2(cx, size.y - 130.0))
 
 
-## Upcoming junction: one arrow per branch in the direction it leaves, the one
-## we'll take (lean that way inside the tube, or let the autopilot pick) lit up.
+## Upcoming junction as a lane sign: one box per lane, left to right as the
+## lanes lie in the tube, each with an arrow for its turn. The lane you're in
+## is lit, the one the GPS wants is framed in gold.
 func _junction(font: Font, p: PlayerShip, c: Vector2) -> void:
 	var j: Dictionary = p.junction
 	if j.is_empty():
 		return
 	var title := "%s  %s" % [j["name"].to_upper(), _fmt_dist(j["dist"])]
 	_text(UiKit.display(600), c, title, 14, Color(1, 1, 1, 0.8))
-	var cc := c + Vector2(0, 58)
-	draw_arc(cc, 34, 0, TAU, 32, Color(1, 1, 1, 0.18), 1.5, true)
 	var opts: Array = j["options"]
-	for i in opts.size():
+	var nb := opts.size()
+	if nb == 0:
+		_text(font, c + Vector2(0, 40), "End of the road", 16, Color(1, 1, 1, 0.75))
+		return
+	var g: Dictionary = world.gps_info()
+	var gps_band: int = g.get("band", -1) if g.get("junction", -1) == j["node"] else -1
+	var bw := 62.0
+	var bh := 72.0
+	var x0 := c.x - bw * nb * 0.5
+	var y0 := c.y + 16.0
+	for i in nb:
 		var o: Dictionary = opts[i]
-		var d: Vector2 = o["dir2"]
-		if d.length() < 0.12:
-			d = Vector2(0, -1)   # straight on: point up
-		d = d.normalized()
 		var picked: bool = i == j["pick"]
-		var oc: Color = HWY if o["kind"] == "highway" else ROAD
-		oc = Color(oc, 1.0 if picked else 0.4)
-		var tip := cc + d * (34.0 if picked else 28.0)
-		var perp := Vector2(-d.y, d.x)
-		draw_line(cc + d * 8.0, tip, oc, 5.0 if o["kind"] == "highway" else 2.5, true)
-		draw_colored_polygon(PackedVector2Array([tip + d * 9.0, tip + perp * 6.0, tip - perp * 6.0]), oc)
-		if picked:
-			var lab := "%s to %s" % ["HWY" if o["kind"] == "highway" else "Road", o["name"]]
-			_text(font, cc + Vector2(0, 58), lab, 17, oc)
-	if j["pick"] < 0:
-		var msg := "Stay centred to stop here" if j["kind"] == "poi" else "Lean toward a branch to take it"
-		_text(font, cc + Vector2(0, 58), msg if opts.size() > 0 else "End of the road", 16, Color(1, 1, 1, 0.75))
-	elif not p.autopilot:
-		_text(font, cc + Vector2(0, 80), "lean inside the tube to choose", 12, Color(1, 1, 1, 0.45))
+		var r := Rect2(x0 + i * bw + 3, y0, bw - 6, bh)
+		var oc: Color = HWY if o["kind"] == "highway" else (DEST_COL if o.get("stop", false) else ROAD)
+		draw_rect(r, Color(oc, 0.28 if picked else 0.07))
+		draw_rect(r, Color(oc, 0.9 if picked else 0.3), false, 2.0 if picked else 1.0)
+		if i == gps_band:
+			draw_rect(r.grow(4), GPS_COL, false, 3.0)
+		var ac := Color(oc, 1.0 if picked else 0.5)
+		var cc := r.get_center() + Vector2(0, -4)
+		if o.get("stop", false):
+			draw_rect(Rect2(cc - Vector2(9, 9), Vector2(18, 18)), ac)
+			UiKit.text_c(self, UiKit.display(700), cc + Vector2(0, 26), "STOP", 10, ac, false)
+		else:
+			var a := deg_to_rad(float(o["turn"]))
+			var d := Vector2(sin(a), -cos(a))
+			var base := cc + Vector2(0, 18)
+			var mid := cc + Vector2(0, 2)
+			var tip := mid + d * 16.0
+			draw_polyline(PackedVector2Array([base, mid, tip]), ac, 5.0 if o["kind"] == "highway" else 3.0, true)
+			var pp := Vector2(-d.y, d.x)
+			draw_colored_polygon(PackedVector2Array([tip + d * 9.0, tip + pp * 7.0, tip - pp * 7.0]), ac)
+			UiKit.text_c(self, UiKit.display(700), cc + Vector2(0, 28), "HWY" if o["kind"] == "highway" else "ROAD", 10, ac, false)
+	var pk: int = j["pick"]
+	if pk >= 0:
+		var o: Dictionary = opts[pk]
+		var lab: String = ("Stop at " + j["name"]) if o.get("stop", false) else "%s to %s" % ["Highway" if o["kind"] == "highway" else "Road", o["name"]]
+		_text(font, Vector2(c.x, y0 + bh + 22), lab, 17, Color(1, 1, 1, 0.95))
+	if not p.autopilot and nb > 1:
+		_text(font, Vector2(c.x, y0 + bh + 44), "slide left / right in the tube to pick a lane", 12, Color(1, 1, 1, 0.45))
 
 
 ## Cross-section of the tube: where we are inside it and how hard the turn
@@ -380,6 +460,18 @@ func _drift_gauge(p: PlayerShip, lane: SpaceLane, c: Vector2) -> void:
 		draw_line(dot, tip, pc, 2.5, true)
 		var d := (tip - dot).normalized()
 		draw_colored_polygon(PackedVector2Array([tip + d * 6.0, tip + Vector2(-d.y, d.x) * 4.0, tip - Vector2(-d.y, d.x) * 4.0]), pc)
+	var j: Dictionary = p.junction
+	if not j.is_empty() and j["bands"] > 1:
+		var nb: int = j["bands"]
+		var g: Dictionary = world.gps_info()
+		var gb: int = g.get("band", -1) if g.get("junction", -1) == j["node"] else -1
+		var bw := 2.0 * PlayerShip.BAND_WIDTH * r / nb
+		for i in nb:
+			var x := c.x - PlayerShip.BAND_WIDTH * r + i * bw
+			if i == gb:
+				draw_rect(Rect2(x, c.y - r * 0.55, bw, r * 1.1), Color(GPS_COL, 0.3))
+			if i > 0:
+				draw_line(Vector2(x, c.y - r * 0.55), Vector2(x, c.y + r * 0.55), Color(1, 1, 1, 0.35), 1.5)
 	draw_circle(dot, 5.0, Color(0.6, 1.0, 0.75))
 	UiKit.text_c(self, UiKit.display(600), c + Vector2(0, r + 16), "TURN PUSH" if push.length() > 0.2 else "IN THE TUBE", 11, Color(1, 1, 1, 0.55), false)
 

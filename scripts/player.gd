@@ -207,7 +207,7 @@ func set_autopilot(on: bool, why := "") -> void:
 func _autopilot_flight(delta: float) -> void:
 	var to := ap_goal - global_position
 	var dist := to.length()
-	var dir := to / maxf(dist, 0.001)
+	var dir := _avoid_rocks(to / maxf(dist, 0.001), dist)
 	var cur := global_transform.basis
 	var want := Basis.looking_at(dir, Vector3.UP)
 	var ang := (-cur.z).angle_to(dir)
@@ -225,6 +225,32 @@ func _autopilot_flight(delta: float) -> void:
 		spd *= 0.5   # turn first, then accelerate
 	_drive(delta, spd)
 	_check_merge()
+
+
+## Bend the autopilot heading around asteroids on the way: the nearest rock
+## whose surface the straight line would pass too close to pushes the heading
+## sideways, so the autopilot can't wedge itself against a rock.
+func _avoid_rocks(dir: Vector3, dist: float) -> Vector3:
+	var look := minf(dist, 500.0 + speed * 2.5)
+	var margin := 45.0 * cam_scale
+	var best_t := INF
+	var push := Vector3.ZERO
+	for r in world.rocks:
+		var rel: Vector3 = r["pos"] - global_position
+		var t := rel.dot(dir)
+		if t < -float(r["r"]) or t > look:
+			continue
+		var side := rel - dir * t
+		var clear: float = r["r"] + margin
+		if side.length_squared() < clear * clear and t < best_t:
+			best_t = t
+			var away := -side
+			if away.length_squared() < 1.0:
+				away = global_transform.basis.x
+			push = away.normalized() * (1.0 - side.length() / clear + 0.35)
+	if push == Vector3.ZERO:
+		return dir
+	return (dir + push * 1.6).normalized()
 
 
 func take_damage(amount: float) -> void:
@@ -392,51 +418,60 @@ func enter_lane(dir := 0, merged := false, track: SpaceLane = null) -> void:
 		GameState.message.emit("%s %s toward %s" % ["Merged onto the" if merged else "Joined the", lane.kind, where], Color(0.5, 0.9, 1.0))
 
 
-## Junction preview for the HUD: {node, kind, dist, options: [branch + dir2], pick: index or -1}.
+## Junction preview for the HUD: {node, name, kind, dist, options, pick, bands}.
+## The options are the junction's lanes, left to right: every branch you can
+## take with a turn of at most 60 degrees, plus "stop here" on the far right
+## at stations, gates and beacons. Which one you take is set by which lane
+## (side of the tube) you hold as you arrive.
 var junction := {}
+
+const BAND_WIDTH := 0.8   # the lanes share this fraction of the tube's width
+
+
+## The lanes at the end of track t when riding it in dir.
+func junction_options(t: SpaceLane, dir: int) -> Array:
+	var n := net.end_node(t, dir)
+	var opts: Array = net.allowed(t, dir).duplicate()
+	if net.nodes[n]["kind"] == "poi":
+		opts.append({"stop": true, "turn": 90.0, "name": net.node_name(n), "kind": "stop", "track": null, "dir": 0})
+	return opts
+
+
+## Lane index for a sideways offset (ship-relative, metres) with nb lanes.
+func band_at(rx: float, nb: int) -> int:
+	var u := clampf(rx / (lane.radius * BAND_WIDTH), -0.999, 0.999)
+	return clampi(int(floor((u + 1.0) * 0.5 * nb)), 0, nb - 1)
+
+
+## Ship-relative sideways offset (metres) of the middle of lane i of nb.
+func band_centre(i: int, nb: int) -> float:
+	return ((i + 0.5) / nb * 2.0 - 1.0) * lane.radius * BAND_WIDTH
 
 
 func _update_junction() -> void:
 	var end_s: float = lane.length if lane_dir > 0 else 0.0
 	var rem := absf(end_s - lane_s)
-	var look := maxf(2500.0, lane_speed * 4.0)
+	var look := maxf(4500.0, lane_speed * 6.0)
 	if rem > look:
 		junction = {}
 		return
 	var n := net.end_node(lane, lane_dir)
-	var brs := net.branches(lane, lane_dir)
-	var f := lane.frame(end_s)
-	var ship_right: Vector3 = f["right"] * lane_dir
-	var ship_up: Vector3 = f["up"]
-	var in_fwd: Vector3 = f["fwd"] * lane_dir
-	for b in brs:
-		b["dir2"] = Vector2((b["out"] as Vector3).dot(ship_right), -(b["out"] as Vector3).dot(ship_up))
-		# going straight on prefers staying on the same kind of track
-		b["straight"] = (b["out"] as Vector3).dot(in_fwd) + (0.6 if b["kind"] == lane.kind else 0.0)
+	var opts := junction_options(lane, lane_dir)
+	var nb := opts.size()
 	var pick := -1
-	if autopilot:
-		if ap_route.size() > 1:
-			for i in brs.size():
-				if brs[i]["track"] == ap_route[1]["track"]:
-					pick = i
-	else:
-		# lean toward a branch inside the tube to take it; stay centred to go
-		# straight on (or to stop at a station / gate / beacon)
-		var off := Vector2(lane_offset.x * lane_dir, -lane_offset.y) / lane.radius
-		if off.length() > 0.3:
-			var best := 0.15
-			for i in brs.size():
-				var sc: float = off.normalized().dot((brs[i]["dir2"] as Vector2).normalized()) * minf(1.0, (brs[i]["dir2"] as Vector2).length() * 4.0)
-				if sc > best:
-					best = sc
-					pick = i
-		if pick < 0 and net.nodes[n]["kind"] != "poi":
-			var best_s := -2.0
-			for i in brs.size():
-				if brs[i]["straight"] > best_s:
-					best_s = brs[i]["straight"]
-					pick = i
-	junction = {"node": n, "name": net.node_name(n), "kind": net.nodes[n]["kind"], "dist": rem, "options": brs, "pick": pick}
+	if nb > 0:
+		pick = band_at(lane_offset.x * lane_dir, nb)
+		if autopilot:
+			var want := -1
+			if ap_route.size() > 1:
+				for i in nb:
+					if opts[i]["track"] == ap_route[1]["track"] and opts[i]["dir"] == ap_route[1]["dir"]:
+						want = i
+			elif opts[nb - 1].get("stop", false):
+				want = nb - 1
+			if want >= 0:
+				pick = want
+	junction = {"node": n, "name": net.node_name(n), "kind": net.nodes[n]["kind"], "dist": rem, "options": opts, "pick": pick, "bands": nb}
 
 
 func _lane_ride(delta: float) -> void:
@@ -471,12 +506,14 @@ func _lane_ride(delta: float) -> void:
 	var steer_v: Vector2
 	if autopilot:
 		var want := Vector2(0, lane.radius * 0.3)
-		if not junction.is_empty() and junction["pick"] >= 0 and junction["dist"] < 1800.0:
-			var d2: Vector2 = junction["options"][junction["pick"]]["dir2"]
-			if d2.length() > 0.12:
-				want = Vector2(d2.x * lane_dir, -d2.y).normalized() * lane.radius * 0.45
+		var in_band: bool = not junction.is_empty() and junction["pick"] >= 0 and junction["bands"] > 1
 		var ahead := lane.traffic_near(lane_s, lane_dir, lane_offset, maxf(500.0, lane_speed * 0.5))
-		if not ahead.is_empty():
+		if in_band:
+			# get into the lane for the branch we want, dodging traffic up or down
+			want = Vector2(band_centre(junction["pick"], junction["bands"]) * lane_dir, lane.radius * 0.3)
+			if not ahead.is_empty():
+				want.y = -signf((ahead["offset"] as Vector2).y + 0.01) * lane.radius * 0.4
+		elif not ahead.is_empty():
 			want = Vector2(-(ahead["offset"] as Vector2).x, lane.radius * 0.35)
 		steer_v = ((want - lane_offset) * 1.5 - push + lane_offset / lane.radius * float(sp["steer"]) * 0.55).limit_length(sp["steer"])
 		steer = Vector2(steer_v.x * lane_dir, steer_v.y) / float(sp["steer"])
@@ -485,7 +522,13 @@ func _lane_ride(delta: float) -> void:
 		steer_v = Vector2(steer.x * lane_dir, steer.y) * float(sp["steer"])
 	# the tube gently pulls you back toward the middle, harder near the wall,
 	# so easy turns ride themselves and only sharp ones at speed need a hand
-	var centre := -lane_offset / lane.radius * float(sp["steer"]) * 0.55
+	var hold := Vector2.ZERO
+	if not junction.is_empty() and junction["bands"] > 1:
+		# near a junction it holds you in the middle of your lane instead,
+		# so you slide across to pick a branch and it keeps you there
+		var nb: int = junction["bands"]
+		hold.x = band_centre(band_at(lane_offset.x * lane_dir, nb), nb) * lane_dir
+	var centre := -(lane_offset - hold) / lane.radius * float(sp["steer"]) * 0.55
 	lane_offset += (steer_v + push + centre) * delta
 
 	if lane_offset.length() > lane.radius - 6.0:
@@ -511,11 +554,15 @@ func _lane_ride(delta: float) -> void:
 
 	if lane_s <= 0.0 or lane_s >= lane.length:
 		lane_s = clampf(lane_s, 0.0, lane.length)
+		_update_junction()
 		var pick: int = junction.get("pick", -1)
-		if junction.is_empty() or pick < 0:
+		if junction.is_empty() or pick < 0 or junction["options"][pick].get("stop", false):
 			var where := net.node_name(net.end_node(lane, lane_dir))
 			_leave_lane(false)
-			GameState.message.emit("End of the %s: %s" % [lane_kind_word(), where], Color(0.5, 0.9, 1.0))
+			if pick >= 0:
+				GameState.message.emit("Off the %s at %s" % [lane_kind_word(), where], Color(0.5, 0.9, 1.0))
+			else:
+				GameState.message.emit("End of the %s: %s" % [lane_kind_word(), where], Color(0.5, 0.9, 1.0))
 			return
 		_switch_track(junction["options"][pick])
 		return

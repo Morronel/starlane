@@ -98,6 +98,15 @@ func _run() -> void:
 	GameState.hull = GameState.max_hull()
 	main.player.refresh_ship()
 	main._launch()
+	# head for the farthest station so the GPS has a route to call out
+	var far_id := ""
+	var far_d := 0.0
+	for sid in main.stations:
+		var dd: float = (main.stations[sid] as Node3D).global_position.distance_to(main.player.global_position)
+		if dd > far_d:
+			far_d = dd
+			far_id = sid
+	GameState.set_destination("station", far_id)
 	GameInput.throttle = 0.5
 	await _wait(2.5)
 	await _shot("06_launch_destination")
@@ -129,11 +138,36 @@ func _run() -> void:
 	GameInput.throttle = 1.0
 	await _wait(2.5)
 	await _shot("09_highway_ride")
-	# close to the interchange at the end: junction preview
-	p.lane_s = hwy.length - 9000.0
-	p.lane_offset = Vector2(hwy.radius * 0.5, 0)
-	await _wait(1.2)
-	await _shot("10_highway_junction")
+	# close to a fork on the GPS route: lane sign, the GPS lane framed
+	p.exit_lane()
+	var fork := {}
+	var dst: Node3D = main.stations[far_id]
+	var gr: Array = main.net.plan(main.gates.values()[0].global_position, dst.global_position, p.top_speed())["rides"]
+	for i in range(gr.size() - 1):
+		var r: Dictionary = gr[i]
+		if p.junction_options(r["track"], r["dir"]).size() >= 2:
+			fork = r
+			break
+	if fork.is_empty():
+		fork = {"track": hwy, "dir": 1}
+	var ft: SpaceLane = fork["track"]
+	var fd: int = fork["dir"]
+	var fs: float = ft.length - 5200.0 if fd > 0 else 5200.0
+	f = ft.frame(fs)
+	p.global_transform = Transform3D(Basis.looking_at(f["fwd"] * fd, Vector3.UP), f["origin"])
+	p.enter_lane(fd, true, ft)
+	p.lane_s = fs
+	p.lane_speed = 700.0
+	GameInput.throttle = 0.0
+	await _wait(1.0)
+	await _shot("10_junction_gps")
+	Settings.first_person = true
+	main.camera.snap()
+	p.lane_s = fs
+	await _wait(1.0)
+	await _shot("10b_junction_gps_cockpit")
+	Settings.first_person = false
+	main.camera.snap()
 	p.exit_lane()
 	# a road, leaning into a turn
 	var sharp := 0.0

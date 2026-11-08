@@ -12,10 +12,12 @@ extends Node3D
 ## steer = sideways steering rate inside the tube (m/s),
 ## grip = how hard turns push you outward (higher = gentler).
 const KINDS := {
-	"road": {"radius": 130.0, "merge": 260.0, "min": 280.0, "speed": 900.0, "boost": 380.0, "ap": 720.0,
-		"accel": 1.1, "steer": 260.0, "grip": 1.5, "label": "ROAD"},
-	"highway": {"radius": 420.0, "merge": 640.0, "min": 900.0, "speed": 4000.0, "boost": 1600.0, "ap": 3100.0,
-		"accel": 0.42, "steer": 430.0, "grip": 4.9, "label": "HIGHWAY"},
+	# grip scales with speed squared (2x speed -> 4x grip) so turns push you
+	# toward the wall exactly as hard as before; only the pace changes
+	"road": {"radius": 220.0, "merge": 420.0, "min": 560.0, "speed": 1800.0, "boost": 760.0, "ap": 1440.0,
+		"accel": 1.1, "steer": 260.0, "grip": 6.0, "label": "ROAD"},
+	"highway": {"radius": 600.0, "merge": 900.0, "min": 1350.0, "speed": 6000.0, "boost": 2400.0, "ap": 4650.0,
+		"accel": 0.42, "steer": 430.0, "grip": 11.0, "label": "HIGHWAY"},
 }
 const TRAFFIC_SIDE := 0.45   # traffic rides at this fraction of the radius, right of centre
 
