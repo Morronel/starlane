@@ -60,8 +60,6 @@ func _draw() -> void:
 	if p.mode == PlayerShip.Mode.JUMPING:
 		UiKit.text_c(self, UiKit.display(800, 6), Vector2(center.x, size.y * 0.3), "JUMP DRIVE ENGAGED", 30, Color(1, 1, 1, 0.9))
 		return
-	if Settings.first_person:
-		_cockpit()
 
 	_bars(font, p)
 	_destination(font, p, cam)
@@ -79,23 +77,12 @@ func _draw() -> void:
 		_target(font, p, cam)
 
 	# speed / throttle readout
-	var spd := "%d m/s" % int(p.speed)
-	_text(font, Vector2(center.x, size.y - 38), spd, 26, Color(1, 1, 1, 0.9))
+	if not Settings.first_person:   # the cockpit screens show speed in 1st person
+		var spd := "%d m/s" % int(p.speed)
+		_text(font, Vector2(center.x, size.y - 38), spd, 26, Color(1, 1, 1, 0.9))
 	if p.mode == PlayerShip.Mode.DOCKING:
 		_text(font, Vector2(center.x, size.y * 0.3), "AUTOPILOT DOCKING", 28, Color(0.5, 1.0, 0.7))
 
-
-func _cockpit() -> void:
-	## Minimal canopy frame for the first-person view.
-	var w := size.x
-	var h := size.y
-	var col := Color(0.02, 0.03, 0.05, 0.85)
-	draw_colored_polygon(PackedVector2Array([Vector2(0, h), Vector2(w * 0.22, h * 0.86), Vector2(w * 0.78, h * 0.86), Vector2(w, h)]), col)
-	draw_colored_polygon(PackedVector2Array([Vector2(0, 0), Vector2(w * 0.12, 0), Vector2(0, h * 0.35)]), col)
-	draw_colored_polygon(PackedVector2Array([Vector2(w, 0), Vector2(w * 0.88, 0), Vector2(w, h * 0.35)]), col)
-	draw_line(Vector2(w * 0.22, h * 0.86), Vector2(w * 0.78, h * 0.86), Color(CY, 0.35), 2.0)
-	draw_line(Vector2(w * 0.12, 0), Vector2(0, h * 0.35), Color(CY, 0.2), 2.0)
-	draw_line(Vector2(w * 0.88, 0), Vector2(w, h * 0.35), Color(CY, 0.2), 2.0)
 
 
 func _bars(font: Font, p: PlayerShip) -> void:

@@ -247,6 +247,16 @@ func _run() -> void:
 	# --- manual lane merge: fly into the tube along it
 	main._launch()
 	await _wait(1.0)
+	# cockpit view: the Wren cabin is built and shown, and hides again in 3rd person
+	Settings.first_person = true
+	await _wait(0.4)
+	if not main.cockpit.visible or main.cockpit._built != "wren":
+		return _fail("cockpit not shown for the Wren")
+	Settings.first_person = false
+	await _wait(0.2)
+	if main.cockpit.visible:
+		return _fail("cockpit still visible in 3rd person")
+	print("cockpit ok: ", main.cockpit._built)
 	var c: Dictionary = main.lane.closest(p.global_position)
 	var s_mid: float = main.lane.length * 0.3
 	var f: Dictionary = main.lane.frame(s_mid)

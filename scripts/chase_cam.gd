@@ -39,6 +39,7 @@ func _physics_process(delta: float) -> void:
 		smooth_basis = global_basis
 		return
 	var fp := Settings.first_person and target.mode != PlayerShip.Mode.DOCKING
+	near = 0.04 if fp else 0.3
 	if fp:
 		# cockpit view: locked to the ship with a touch of rotational smoothing
 		smooth_basis = smooth_basis.slerp(t.basis.orthonormalized(), 1.0 - exp(-delta * 20.0)).orthonormalized()
@@ -64,17 +65,19 @@ func _fov_and_shake(delta: float, in_lane: bool) -> void:
 	var want_fov := 68.0 + minf(spd_ratio, 2.2) * 6.0 + (10.0 if in_lane else 0.0) + warp * 55.0
 	fov = lerpf(fov, want_fov, 1.0 - exp(-delta * 2.5))
 
+	# in the cockpit the cabin sits half a metre away, so shake must stay tiny
+	var amp := 0.03 if near < 0.1 else 0.6
 	if shake_amt > 0.001:
-		h_offset = randf_range(-1, 1) * shake_amt * 0.6
-		v_offset = randf_range(-1, 1) * shake_amt * 0.6
+		h_offset = randf_range(-1, 1) * shake_amt * amp
+		v_offset = randf_range(-1, 1) * shake_amt * amp
 		shake_amt = maxf(0.0, shake_amt - delta * 2.0)
 	else:
 		h_offset = 0.0
 		v_offset = 0.0
 	# subtle constant rumble in the lane
 	if in_lane:
-		h_offset += randf_range(-1, 1) * 0.05
-		v_offset += randf_range(-1, 1) * 0.05
+		h_offset += randf_range(-1, 1) * 0.05 * amp / 0.6
+		v_offset += randf_range(-1, 1) * 0.05 * amp / 0.6
 
 
 func snap() -> void:

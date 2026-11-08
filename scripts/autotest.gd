@@ -3,6 +3,7 @@ extends Node
 
 var main: Node
 var out_dir := ""
+var cockpits_only := false
 
 
 func _ready() -> void:
@@ -20,7 +21,43 @@ func _wait(sec: float) -> void:
 	await get_tree().create_timer(sec, true, false, true).timeout
 
 
+## One first-person shot per hull, near a station, with the yoke deflected.
+func _cockpits() -> void:
+	var p: PlayerShip = main.player
+	Settings.first_person = true
+	var i := 0
+	for id in OS.get_environment("COCKPITS").split(",") if OS.get_environment("COCKPITS") != "" else ["sparrow", "wren", "kestrel", "mule", "corsair", "seraph"]:
+		GameState.ship = id
+		GameState._normalize_equip()
+		GameState.hull = GameState.max_hull()
+		p.refresh_ship()
+		if p.mode != PlayerShip.Mode.FLIGHT:
+			main._launch()
+			await _wait(0.5)
+		var st: Station = main.stations.values()[i % main.stations.size()]
+		var sp: Vector3 = st.approach_point() + (st.approach_point() - st.global_position).normalized() * 1100.0 + Vector3(0, 120, 0)
+		p.global_transform = Transform3D(Basis.looking_at(st.global_position - sp, Vector3.UP), sp)
+		p.velocity = Vector3.ZERO
+		GameInput.throttle = 0.15
+		main.camera.snap()
+		GameInput.touch_roll = 0.0 if i % 2 == 0 else 0.7
+		GameInput.touch_stick = Vector2(0.0, 0.0) if i % 2 == 0 else Vector2(-0.3, 0.2)
+		await _wait(0.7)
+		await _shot("cockpit_%d_%s" % [i + 1, id])
+		GameInput.touch_roll = 0.0
+		GameInput.touch_stick = Vector2.ZERO
+		i += 1
+	Settings.first_person = false
+
+
 func _run() -> void:
+	if cockpits_only:
+		GameState.reset_game()
+		main.restart_from_save(true)
+		await _wait(1.0)
+		await _cockpits()
+		get_tree().quit()
+		return
 	GameState.reset_game()
 	GameState.credits = 60000
 	GameState.parts = {"scrap": 9, "circuit": 3, "coil": 1, "crystal": 2}

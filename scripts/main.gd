@@ -4,6 +4,7 @@ extends Node3D
 
 var env: SpaceEnv
 var camera: ChaseCam
+var cockpit: Cockpit
 var player: PlayerShip
 var lane: SpaceLane
 var combat: Combat
@@ -54,6 +55,10 @@ func _ready() -> void:
 	player.docked.connect(_on_docked)
 	player.lane_changed.connect(func(on): sfx.lane(on))
 	camera.target = player
+	cockpit = Cockpit.new()
+	cockpit.player = player
+	cockpit.world = self
+	camera.add_child(cockpit)
 
 	_build_ui()
 	GameInput.auto_fire_changed.connect(_on_auto_fire)
@@ -64,10 +69,11 @@ func _ready() -> void:
 	restart_from_save(true)
 
 	for arg in OS.get_cmdline_user_args():
-		if arg.begins_with("--autotest="):
+		if arg.begins_with("--autotest=") or arg.begins_with("--cockpits="):
 			var t: Node = load("res://scripts/autotest.gd").new()
 			t.set("main", self)
 			t.set("out_dir", arg.substr(11))
+			t.set("cockpits_only", arg.begins_with("--cockpits="))
 			add_child(t)
 		elif arg == "--simtest":
 			var s: Node = load("res://scripts/simtest.gd").new()
