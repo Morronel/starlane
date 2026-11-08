@@ -1,6 +1,6 @@
 extends Node3D
-## Builds the Tessaly system and runs the game loop:
-## dock -> trade / take a mission -> lane -> fight -> upgrade.
+## Builds the current star system and runs the game loop:
+## dock -> trade / take a contract -> lane -> fight -> upgrade -> jump to the next system.
 
 var env: SpaceEnv
 var camera: ChaseCam
@@ -8,17 +8,27 @@ var player: PlayerShip
 var lane: SpaceLane
 var combat: Combat
 var stations := {}
+var gates := {}            # link system id -> Stargate
 var beacon_pos := Vector3.ZERO
-var rocks: Array = []   # {pos, r}
+var field_center := Vector3.ZERO
+var rocks: Array = []      # {pos, r}
+var world_root: Node3D
+var _side := Vector3.RIGHT
 
 var hud: Hud
 var touch: TouchControls
 var menu: StationMenu
+var star_map: StarMap
+var settings_panel: SettingsPanel
 var fade: ColorRect
 var sfx: Sfx
 
 var _ambient_timer := 0.0
+var _combat_hold := 0.0
 var _respawning := false
+var _jumping := false
+var _last_target: Node3D
+var _alarm_t := 0.0
 
 
 func _ready() -> void:
@@ -37,11 +47,8 @@ func _ready() -> void:
 	combat.world = self
 	add_child(combat)
 
-	_build_system()
-
 	player = PlayerShip.new()
 	player.world = self
-	player.lane = lane
 	add_child(player)
 	player.died.connect(_on_player_died)
 	player.docked.connect(_on_docked)
@@ -49,17 +56,12 @@ func _ready() -> void:
 	camera.target = player
 
 	_build_ui()
-	_spawn_ambient_raiders()
+	GameInput.auto_fire_changed.connect(_on_auto_fire)
+	GameInput.map_pressed.connect(_toggle_map)
+	GameInput.autopilot_pressed.connect(toggle_autopilot)
+	GameState.mission_completed.connect(func(): sfx.play("mission_complete", -2.0))
 
-	# start docked at Halcyon Yard
-	var st: Station = stations["halcyon"]
-	player.global_transform = st.undock_transform()
-	player.dock_station = st
-	player.mode = PlayerShip.Mode.DOCKED
-	player.model.visible = false
-	camera.global_position = st.global_position + Vector3(300, 120, -300)
-	camera.look_at(st.global_position)
-	_show_menu(st, ["Welcome to the Tessaly system, pilot.", "Take a contract, trade cargo, then LAUNCH."])
+	restart_from_save(true)
 
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--autotest="):
@@ -73,73 +75,159 @@ func _ready() -> void:
 			add_child(s)
 
 
+## (Re)start docked at the saved station.
+func restart_from_save(first := false) -> void:
+	load_system(GameState.system_id)
+	player.refresh_ship()
+	player.autopilot = false
+	var st: Station = stations.get(GameState.last_station, stations.values()[0])
+	player.global_transform = st.undock_transform()
+	player.dock_station = st
+	player.mode = PlayerShip.Mode.DOCKED
+	player.model.visible = false
+	camera.global_position = st.global_position + Vector3(300, 120, -300)
+	camera.look_at(st.global_position)
+	var notes := ["Welcome aboard, pilot. Take a contract, trade cargo, then LAUNCH."] if first and GameState.kills == 0 else []
+	_show_menu(st, notes)
+
+
 # --- World -----------------------------------------------------------------------
 
-func _build_system() -> void:
-	var a_pos := Vector3.ZERO
-	var b_pos := Vector3(3200, 500, -9200)
-	var ab := (b_pos - a_pos).normalized()
+func load_system(id: String) -> void:
+	GameState.system_id = id
+	GameState.visited[id] = true
+	var sysd: Dictionary = Galaxy.SYSTEMS[id]
+	if world_root:
+		remove_child(world_root)
+		world_root.queue_free()
+	combat.clear_all()
+	stations.clear()
+	gates.clear()
+	rocks.clear()
+	world_root = Node3D.new()
+	world_root.name = "System_" + id
+	add_child(world_root)
+	env.apply_system(sysd["sky"])
+	_build_system(id, sysd)
+	player.lane = lane
+	_ambient_timer = 0.0
+	_spawn_ambient_raiders()
 
-	var a := Station.new()
-	a.station_id = "halcyon"
-	a.display_name = "Halcyon Yard"
-	a.accent = Color(0.25, 0.85, 1.0)
-	a.variant = 0
-	add_child(a)
-	a.global_transform = Transform3D(Basis.looking_at(ab, Vector3.UP), a_pos)
-	a.build()
-	stations["halcyon"] = a
 
-	var b := Station.new()
-	b.station_id = "verdant"
-	b.display_name = "Verdant Spire"
-	b.accent = Color(1.0, 0.65, 0.25)
-	b.variant = 1
-	add_child(b)
-	b.global_transform = Transform3D(Basis.looking_at(-ab, Vector3.UP).rotated(-ab, 0.6), b_pos)
-	b.build()
-	stations["verdant"] = b
+func _build_system(id: String, sysd: Dictionary) -> void:
+	## One long, gently winding lane (~50 km) from station A to station B, with the
+	## third station, the beacon and the stargates hanging off it a few km out.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(id)
+	var yaw := rng.randf() * TAU
+	var ab := Vector3(cos(yaw), rng.randf_range(-0.05, 0.05), sin(yaw)).normalized()
+	var up := Vector3.UP
+	var side := ab.cross(up).normalized()
+	_side = side
+	var L := rng.randf_range(46000.0, 52000.0)
+	var phase := rng.randf() * TAU
+	var amp := rng.randf_range(2000.0, 3500.0)
+	var lane_pt := func(f: float) -> Vector3:
+		var env := sin(f * PI)
+		return ab * (f * L) + side * (sin(f * TAU * 0.9 + phase) * amp * env) + up * (sin(f * TAU * 1.3 + phase * 2.0) * 400.0 * env)
+	var perp_at := func(f: float) -> Vector3:
+		var t: Vector3 = (lane_pt.call(minf(f + 0.002, 1.0)) - lane_pt.call(maxf(f - 0.002, 0.0))).normalized()
+		return t.cross(up).normalized()
 
-	var gate_a := a_pos + ab * 650.0
-	var gate_b := b_pos - ab * 650.0
-	var side := ab.cross(Vector3.UP).normalized()
-	beacon_pos = (gate_a + gate_b) * 0.5 + side * 1400.0 + Vector3(0, -250, 0)
-	var c1 := gate_a.lerp(beacon_pos, 0.5) + side * 300.0 + Vector3(0, 200, 0)
-	var c2 := beacon_pos.lerp(gate_b, 0.5) + side * 250.0 + Vector3(0, -150, 0)
+	var pts := []
+	for i in 33:
+		pts.append(lane_pt.call(i / 32.0))
+	var start_dir: Vector3 = (pts[1] - pts[0]).normalized()
+	var end_dir: Vector3 = (pts[32] - pts[31]).normalized()
+
+	var sdefs: Array = sysd["stations"]
+	var links: Array = sysd["links"]
+	var a_pos: Vector3 = pts[0] - start_dir * 2200.0 + up * rng.randf_range(-200, 200)
+	var b_pos: Vector3 = pts[32] + end_dir * 2200.0 + up * rng.randf_range(-200, 200)
+	var a := _make_station(sdefs[0], a_pos, start_dir, 0.0)
+	var b := _make_station(sdefs[1], b_pos, -end_dir, 0.6)
+
+	var exits := [{"name": a.display_name, "pos": pts[0], "color": a.accent}]
+	# third station
+	var c_f := 0.52
+	var c_exit: Vector3 = lane_pt.call(c_f)
+	var c_pos: Vector3 = c_exit - perp_at.call(c_f) * 2600.0 + up * 250.0
+	var c: Station = null
+	if sdefs.size() > 2:
+		c = _make_station(sdefs[2], c_pos, (c_exit - c_pos).normalized(), 1.2)
+		exits.append({"name": c.display_name, "pos": c_exit, "color": c.accent})
+	# beacon + asteroid field
+	var bf := 0.38
+	var b_exit: Vector3 = lane_pt.call(bf)
+	beacon_pos = b_exit + perp_at.call(bf) * 3000.0 - up * 300.0
+	exits.append({"name": "Beacon", "pos": b_exit, "color": Color(0.7, 0.5, 1.0)})
+	# stargates
+	var gfs := [0.18, 0.68, 0.86]
+	for i in links.size():
+		var gf: float = gfs[i]
+		var g_exit: Vector3 = lane_pt.call(gf)
+		var sgn := -1.0 if i != 1 else 1.0
+		var gp: Vector3 = g_exit + perp_at.call(gf) * 2600.0 * sgn + up * 150.0
+		var sg := Stargate.new()
+		sg.link = links[i]
+		sg.display_name = "Gate: " + Galaxy.SYSTEMS[links[i]]["name"]
+		sg.color = (Galaxy.SYSTEMS[links[i]]["sky"]["c"] as Color).lerp(Color(1, 0.9, 0.6), 0.4)
+		world_root.add_child(sg)
+		sg.global_transform = Transform3D(Basis.looking_at((g_exit - gp).normalized(), up), gp)
+		sg.build()
+		gates[links[i]] = sg
+		exits.append({"name": "Gate to " + Galaxy.SYSTEMS[links[i]]["name"], "pos": g_exit, "color": Color(1.0, 0.85, 0.4)})
+	exits.append({"name": b.display_name, "pos": pts[32], "color": b.accent})
 
 	lane = SpaceLane.new()
-	add_child(lane)
-	lane.build([gate_a, gate_a + ab * 300.0, c1, beacon_pos, c2, gate_b - ab * 300.0, gate_b], [
-		{"name": "Halcyon Gate", "pos": gate_a, "color": a.accent},
-		{"name": "Kessler Beacon", "pos": beacon_pos, "color": Color(0.7, 0.5, 1.0)},
-		{"name": "Verdant Gate", "pos": gate_b, "color": b.accent},
-	])
+	world_root.add_child(lane)
+	lane.build(pts, exits)
 
 	var bea := MeshInstance3D.new()
 	bea.mesh = Models.beacon(Color(0.7, 0.5, 1.0))
-	add_child(bea)
-	bea.global_position = beacon_pos + side * 160.0
+	world_root.add_child(bea)
+	bea.global_position = beacon_pos - perp_at.call(bf) * 200.0
+	field_center = beacon_pos + perp_at.call(bf) * 2200.0
+	_build_asteroids(field_center, rng)
+	# salvage drifting in the field
+	for i in 16:
+		var lp := field_center + Vector3(rng.randfn() * 1000.0, rng.randfn() * 250.0, rng.randfn() * 1000.0)
+		spawn_loot(lp, Loot.salvage_drop(rng), true)
 
-	_build_asteroids(beacon_pos + side * 700.0)
+
+func spawn_loot(pos: Vector3, contents: Dictionary, drift := false) -> void:
+	var l := Loot.new()
+	world_root.add_child(l)
+	l.setup(self, pos, contents, drift)
 
 
-func _build_asteroids(center: Vector3) -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 7
+func _make_station(def: Dictionary, pos: Vector3, facing: Vector3, roll: float) -> Station:
+	var s := Station.new()
+	s.station_id = def["id"]
+	s.display_name = def["name"]
+	s.kind = def["kind"]
+	s.accent = def["accent"]
+	s.variant = def["variant"]
+	world_root.add_child(s)
+	s.global_transform = Transform3D(Basis.looking_at(facing, Vector3.UP).rotated(facing, roll), pos)
+	s.build()
+	stations[s.station_id] = s
+	return s
+
+
+func _build_asteroids(center: Vector3, rng: RandomNumberGenerator) -> void:
 	var variants: Array[ArrayMesh] = []
+	var tint: Color = (Galaxy.SYSTEMS[GameState.system_id]["sky"]["p2"] as Color).lerp(Color(0.5, 0.45, 0.4), 0.6)
 	for i in 4:
 		var mb := MeshBuilder.new()
-		mb.rock("hull", 1.0, Color(0.5, 0.44, 0.38).lerp(Color(0.62, 0.55, 0.46), rng.randf()), rng)
+		mb.rock("hull", 1.0, tint.lerp(Color(0.62, 0.55, 0.46), rng.randf()), rng)
 		variants.append(mb.build({"hull": MeshBuilder.rock_material()}))
-	var per := []
-	for i in 4:
-		per.append([])
-	for i in 260:
-		var p := center + Vector3(rng.randfn() * 700.0, rng.randfn() * 220.0, rng.randfn() * 700.0)
-		var close := lane.curve.get_closest_point(p)
-		if close.distance_to(p) < 120.0:
+	var per := [[], [], [], []]
+	for i in 420:
+		var p := center + Vector3(rng.randfn() * 1300.0, rng.randfn() * 380.0, rng.randfn() * 1300.0)
+		if lane.curve.get_closest_point(p).distance_to(p) < SpaceLane.RADIUS + 250.0:
 			continue
-		var r := pow(rng.randf(), 3.0) * 55.0 + 4.0
+		var r := pow(rng.randf(), 3.0) * 80.0 + 5.0
 		rocks.append({"pos": p, "r": r * 0.9})
 		var basis := Basis.from_euler(Vector3(rng.randf() * TAU, rng.randf() * TAU, rng.randf() * TAU)).scaled(Vector3.ONE * r)
 		per[i % 4].append(Transform3D(basis, p))
@@ -152,7 +240,7 @@ func _build_asteroids(center: Vector3) -> void:
 			mm.set_instance_transform(j, per[k][j])
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
-		add_child(mmi)
+		world_root.add_child(mmi)
 
 
 func asteroid_push(ship: Node3D) -> void:
@@ -175,21 +263,20 @@ func asteroid_push(ship: Node3D) -> void:
 
 func _spawn_raider(pos: Vector3, elite := false) -> void:
 	var r := Raider.new()
-	add_child(r)
+	world_root.add_child(r)
 	r.setup(self, pos, elite)
 
 
 func _spawn_ambient_raiders() -> void:
-	var side: Vector3 = (stations["verdant"].global_position - stations["halcyon"].global_position).normalized().cross(Vector3.UP)
-	for i in 2:
-		_spawn_raider(beacon_pos + side * (500.0 + i * 120.0) + Vector3(0, 60 * i, 0))
+	var threat: int = Galaxy.SYSTEMS[GameState.system_id]["threat"]
+	for i in 1 + threat:
+		_spawn_raider(beacon_pos + _side * (600.0 + i * 140.0) + Vector3(0, 60 * i, 0), threat >= 3 and i == 0)
 
 
 func _spawn_mission_wave(m: Dictionary) -> void:
-	var side: Vector3 = (stations["verdant"].global_position - stations["halcyon"].global_position).normalized().cross(Vector3.UP)
 	var n: int = m["left"] - get_tree().get_nodes_in_group("enemies").size()
 	for i in maxi(n, 0):
-		var p := beacon_pos + side * randf_range(400, 900) + Vector3(randf_range(-300, 300), randf_range(-150, 150), randf_range(-300, 300))
+		var p := beacon_pos + _side * randf_range(500, 1000) + Vector3(randf_range(-300, 300), randf_range(-150, 150), randf_range(-300, 300))
 		_spawn_raider(p, i == 0)
 	m["spawned"] = true
 
@@ -227,21 +314,69 @@ func lead_point(origin: Vector3, t: Node3D, bolt_speed: float) -> Vector3:
 
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
+	layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(layer)
 	hud = Hud.new()
 	hud.world = self
+	hud.process_mode = Node.PROCESS_MODE_PAUSABLE
 	layer.add_child(hud)
 	touch = TouchControls.new()
+	touch.process_mode = Node.PROCESS_MODE_PAUSABLE
 	layer.add_child(touch)
+	touch.map_tapped.connect(_toggle_map)
+	touch.autopilot_tapped.connect(toggle_autopilot)
+	touch.settings_tapped.connect(_open_settings)
 	menu = StationMenu.new()
+	menu.world = self
 	menu.visible = false
 	layer.add_child(menu)
 	menu.launch_pressed.connect(_launch)
+	menu.map_pressed.connect(func(): _open_map(false))
+	menu.settings_pressed.connect(_open_settings)
+	star_map = StarMap.new()
+	star_map.world = self
+	star_map.visible = false
+	layer.add_child(star_map)
+	star_map.closed.connect(_close_overlay)
+	star_map.jump_requested.connect(_on_jump_requested)
+	star_map.autopilot_requested.connect(func():
+		_close_overlay()
+		toggle_autopilot())
+	settings_panel = SettingsPanel.new()
+	settings_panel.world = self
+	settings_panel.visible = false
+	layer.add_child(settings_panel)
+	settings_panel.closed.connect(_close_overlay)
 	fade = ColorRect.new()
 	fade.color = Color(0, 0, 0, 0)
 	fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(fade)
+
+
+func _toggle_map() -> void:
+	if star_map.visible:
+		_close_overlay()
+	elif not settings_panel.visible and not _jumping:
+		_open_map(false)
+
+
+func _open_map(jump_mode: bool) -> void:
+	touch.reset()
+	star_map.open(jump_mode)
+	get_tree().paused = player.mode != PlayerShip.Mode.DOCKED
+
+
+func _open_settings() -> void:
+	touch.reset()
+	settings_panel.open()
+	get_tree().paused = player.mode != PlayerShip.Mode.DOCKED
+
+
+func _close_overlay() -> void:
+	star_map.visible = false
+	settings_panel.visible = false
+	get_tree().paused = false
 
 
 func shake(a: float) -> void:
@@ -250,31 +385,56 @@ func shake(a: float) -> void:
 
 func flash_damage() -> void:
 	hud.damage_flash = 1.0
-	sfx.hit()
 
 
-func sfx_laser(team: int, _pos: Vector3) -> void:
-	sfx.laser(team, player.global_position.distance_to(_pos))
+func sfx_laser(team: int, pos: Vector3) -> void:
+	sfx.laser(team, player.global_position.distance_to(pos))
 
 
-func sfx_boom(pos: Vector3) -> void:
-	sfx.boom(player.global_position.distance_to(pos))
+func sfx_boom(pos: Vector3, big := false) -> void:
+	sfx.boom(player.global_position.distance_to(pos), big)
 
 
 func _process(delta: float) -> void:
 	env.set_dust_velocity(player.velocity)
-	sfx.engine(player.speed / player.top_speed(), player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE)
-	touch.visible = (player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE)
+	var flying := player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE
+	sfx.engine(player.speed / player.top_speed(), flying or player.mode == PlayerShip.Mode.JUMPING)
+	# combat music while raiders are actually fighting us (with a hold so it doesn't flap)
+	_combat_hold -= delta
+	if flying:
+		if player.shield_delay > 1.0:
+			_combat_hold = maxf(_combat_hold, 6.0)
+		for e in get_tree().get_nodes_in_group("enemies"):
+			if e.engaged() and e.global_position.distance_to(player.global_position) < 2600.0:
+				_combat_hold = 8.0
+				break
+	if player.mode == PlayerShip.Mode.DOCKED:
+		_combat_hold = 0.0
+		sfx.music("station")
+	else:
+		sfx.music("combat" if _combat_hold > 0.0 else "flight")
+	touch.visible = flying and not star_map.visible and not settings_panel.visible
+	hud.visible = not menu.visible and not star_map.visible and not settings_panel.visible
 	lane.lane_mat.set_shader_parameter("intensity", 0.7 if player.mode == PlayerShip.Mode.LANE else 1.0)
 
-	# context action: enter lane / exit lane / dock
+	# target lock blip
+	if player.target != _last_target:
+		_last_target = player.target
+		if _last_target:
+			sfx.play("target_lock", -8.0)
+	# low hull alarm
+	_alarm_t -= delta
+	if flying and GameState.hull < 25.0 and _alarm_t <= 0.0:
+		_alarm_t = 3.0
+		sfx.play("alarm", -8.0)
+
+	# context action: enter lane / exit lane / dock / jump
 	var label := ""
 	var col := Color(0.3, 0.9, 1.0)
 	var act := ""
 	if player.mode == PlayerShip.Mode.LANE:
-		var ne := lane.next_exit(player.lane_s, player.lane_dir)
 		var near := lane.nearest_entry(player.global_position)
-		if not near.is_empty() and near["dist"] < 450.0:
+		if not near.is_empty() and near["dist"] < 600.0:
 			label = "EXIT: " + near["name"]
 		else:
 			label = "DROP OUT"
@@ -282,14 +442,23 @@ func _process(delta: float) -> void:
 		col = Color(0.7, 0.55, 1.0)
 	elif player.mode == PlayerShip.Mode.FLIGHT:
 		var st := player.can_dock()
+		var sg := player.can_jump()
 		if st:
 			label = "DOCK"
 			act = "dock"
 			col = Color(0.4, 1.0, 0.6)
+		elif sg:
+			label = "JUMP"
+			act = "jump"
+			col = Color(1.0, 0.85, 0.4)
 		elif not player.can_enter_lane().is_empty():
 			label = "ENTER LANE"
 			act = "lane"
 	touch.action_label = label
+	touch.autopilot_on = player.autopilot
+	touch.autopilot_ready = not GameState.destination.is_empty()
+	var sec := GameState.installed("secondary")
+	touch.missile_ammo = -1 if sec.is_empty() else GameState.ammo.get(Items.GEAR[sec[0]]["ammo"], 0)
 	touch.action_color = col
 	if not GameInput.using_touch and label != "":
 		touch.action_label = label + "  [T]"
@@ -299,25 +468,214 @@ func _process(delta: float) -> void:
 				player.exit_lane()
 			"dock":
 				player.start_docking(player.can_dock())
-				sfx.ui()
+				sfx.ui("open")
 			"lane":
 				player.enter_lane()
+				sfx.play("lane_merge", -4.0)
+			"jump":
+				_open_map(true)
 
 	# mission waves and ambient raiders
-	var m := GameState.active_hunt()
+	var m := GameState.active_hunt(GameState.system_id)
 	if not m.is_empty() and not m.get("spawned", false):
 		_spawn_mission_wave(m)
 	_ambient_timer += delta
 	if _ambient_timer > 60.0:
 		_ambient_timer = 0.0
-		if get_tree().get_nodes_in_group("enemies").size() < 2 and player.global_position.distance_to(beacon_pos) > 3000.0:
+		var threat: int = Galaxy.SYSTEMS[GameState.system_id]["threat"]
+		if get_tree().get_nodes_in_group("enemies").size() < 1 + threat and player.global_position.distance_to(beacon_pos) > 3000.0:
 			_spawn_ambient_raiders()
+
+
+# --- Autopilot ------------------------------------------------------------------------
+
+func toggle_autopilot() -> void:
+	if player.autopilot:
+		player.set_autopilot(false, "Autopilot disengaged")
+		return
+	if player.mode != PlayerShip.Mode.FLIGHT and player.mode != PlayerShip.Mode.LANE:
+		return
+	var info := GameState.destination_info()
+	if info.is_empty():
+		GameState.message.emit("Pick a destination on the star map first", Color(1.0, 0.85, 0.4))
+		sfx.ui("error")
+		_open_map(false)
+		return
+	player.set_autopilot(true, "Autopilot engaged: " + info["label"])
+
+
+func on_autopilot_changed(on: bool, why: String) -> void:
+	sfx.play("autopilot_on" if on else "autopilot_off", -3.0)
+	if why != "":
+		GameState.message.emit(why, Color(0.55, 1.0, 0.75) if on else Color(0.75, 0.85, 1.0))
+
+
+## Where the destination is in this system: {pos, station, gate, beacon, label} or {}.
+func dest_target() -> Dictionary:
+	var info := GameState.destination_info()
+	if info.is_empty():
+		return {}
+	if info["system"] != GameState.system_id:
+		var route := Galaxy.path(GameState.system_id, info["system"])
+		if route.size() < 2 or not gates.has(route[1]):
+			return {}
+		var g: Stargate = gates[route[1]]
+		return {"pos": g.global_position, "goal": g.approach_point(), "gate": g, "label": "%s (via %s)" % [info["label"], g.display_name.replace("Gate: ", "")], "final": info}
+	if info["station"] != "" and stations.has(info["station"]):
+		var st: Station = stations[info["station"]]
+		return {"pos": st.global_position, "goal": _station_goal(st), "station": st, "label": info["label"], "final": info}
+	return {"pos": beacon_pos, "goal": beacon_pos, "beacon": true, "label": info["label"], "final": info}
+
+
+func _station_goal(st: Station) -> Vector3:
+	var bay := (st.approach_point() - st.global_position).normalized()
+	var rel := player.global_position - st.global_position
+	if rel.length() < 2200.0 and rel.normalized().dot(bay) < 0.35:
+		# behind or beside the station: swing around it first
+		var perp := rel - bay * rel.dot(bay)
+		if perp.length() < 1.0:
+			perp = st.global_transform.basis.x
+		return st.global_position + perp.normalized() * 480.0 + bay * 160.0
+	return st.approach_point()
+
+
+func _physics_process(_delta: float) -> void:
+	if player.autopilot and not _jumping:
+		_autopilot_plan()
+
+
+func _autopilot_plan() -> void:
+	if player.mode != PlayerShip.Mode.FLIGHT and player.mode != PlayerShip.Mode.LANE:
+		return
+	var t := dest_target()
+	if t.is_empty():
+		player.set_autopilot(false, "Destination cleared: autopilot off")
+		return
+	var goal: Vector3 = t["goal"]
+	var slow := true
+	if player.mode == PlayerShip.Mode.FLIGHT:
+		if t.has("station") and player.can_dock() == t["station"]:
+			player.set_autopilot(false, "")
+			player.start_docking(t["station"])
+			sfx.ui("open")
+			return
+		if t.has("gate") and player.can_jump() == t["gate"]:
+			var dest: String = t["final"]["system"]
+			var h := Galaxy.hops(GameState.system_id, dest)
+			if GameState.jump_charges >= h:
+				_on_jump_requested(dest)
+			elif GameState.jump_charges >= 1:
+				_on_jump_requested((t["gate"] as Stargate).link)
+			else:
+				player.set_autopilot(false, "Autopilot stopped: no jump charges. Refuel at a station.")
+			return
+		if t.has("beacon") and player.global_position.distance_to(beacon_pos) < 900.0:
+			player.set_autopilot(false, "Arrived at the beacon. Weapons free!")
+			return
+		# ride the lane when it's clearly faster
+		var cp := lane.closest(player.global_position)
+		var cg := lane.closest(goal)
+		var direct := player.global_position.distance_to(goal)
+		var top := player.top_speed()
+		var t_direct := direct / top
+		var t_lane: float = (cp["dist"] + cg["dist"]) / top + absf(cg["s"] - cp["s"]) / 1250.0
+		if direct > 5000.0 and absf(cg["s"] - cp["s"]) > 3000.0 and t_lane < t_direct * 0.75:
+			var dir := 1 if cg["s"] > cp["s"] else -1
+			if cp["dist"] < SpaceLane.RADIUS * 0.7:
+				player.enter_lane(dir, true)
+				player.ap_lane_exit_s = cg["s"]
+				sfx.play("lane_merge", -4.0)
+				return
+			var s_aim := clampf(cp["s"] + dir * minf(cp["dist"] * 0.6, 1500.0), 0.0, lane.length)
+			goal = lane.curve.sample_baked(s_aim, true)
+			slow = false
+	else:
+		if player.ap_lane_exit_s < 0.0:
+			var cg2 := lane.closest(goal)
+			if (cg2["s"] - player.lane_s) * player.lane_dir > 1500.0:
+				player.ap_lane_exit_s = cg2["s"]
+			else:
+				player.exit_lane()
+	player.ap_goal = goal
+	player.ap_arrive_slow = slow
+
+
+# --- Stargate jumps -------------------------------------------------------------------
+
+func _on_jump_requested(dest: String) -> void:
+	var route := Galaxy.path(GameState.system_id, dest)
+	var hops := route.size() - 1
+	if hops <= 0 or hops > GameState.jump_charges:
+		return
+	_close_overlay()
+	var gate := player.can_jump()
+	if gate == null:
+		return
+	_jumping = true
+	if player.mode == PlayerShip.Mode.LANE:
+		player.exit_lane()
+	player.mode = PlayerShip.Mode.JUMPING
+	touch.reset()
+	GameState.jump_charges -= hops
+	sfx.play("jump", 0.0)
+	GameState.message.emit("Jumping to %s..." % Galaxy.SYSTEMS[dest]["name"], Color(1.0, 0.85, 0.4))
+	# fly into the membrane while it charges
+	var start := player.global_transform
+	var tw := create_tween().set_parallel(true)
+	tw.tween_method(gate.set_charge, 0.0, 1.0, 2.6)
+	tw.tween_property(camera, "warp", 1.0, 2.6).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	_jump_from = start
+	_jump_gate = gate
+	tw.tween_method(_jump_fly, 0.0, 1.0, 2.6)
+	tw.tween_property(fade, "color", Color(1, 1, 1, 1), 0.35).set_delay(2.35)
+	await tw.finished
+	camera.shake(1.2)
+	var from: String = route[route.size() - 2]
+	load_system(dest)
+	var arrive: Stargate = gates.get(from, gates.values()[0])
+	arrive.set_charge(1.0)
+	player.global_transform = arrive.arrival_transform()
+	player.velocity = -player.global_transform.basis.z * 200.0
+	player.speed = 200.0
+	camera.snap()
+	player.mode = PlayerShip.Mode.FLIGHT
+	GameState.save_game()
+	var tw2 := create_tween().set_parallel(true)
+	tw2.tween_property(fade, "color", Color(1, 1, 1, 0), 1.2)
+	tw2.tween_property(camera, "warp", 0.0, 1.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tw2.tween_method(arrive.set_charge, 1.0, 0.0, 2.0)
+	_jumping = false
+	GameState.message.emit("Arrived in %s" % Galaxy.SYSTEMS[dest]["name"], Color(1.0, 0.9, 0.6))
+	await get_tree().create_timer(1.5).timeout
+	GameState.message.emit(Galaxy.SYSTEMS[dest]["desc"], Color(0.75, 0.85, 1.0))
+	fade.color = Color(0, 0, 0, fade.color.a)
+
+
+var _jump_from := Transform3D()
+var _jump_gate: Stargate
+
+
+func _jump_fly(t: float) -> void:
+	var target := _jump_gate.global_position
+	var pos := _jump_from.origin.lerp(target, t * t)
+	player.global_transform = Transform3D(Basis.looking_at((target - _jump_from.origin).normalized(), Vector3.UP), pos)
+	player.speed = 80.0 + t * 900.0
+
+
+func _on_auto_fire(on: bool) -> void:
+	sfx.play("autofire_on" if on else "autofire_off", -2.0)
+	GameState.message.emit("Auto-attack " + ("ON" if on else "OFF"), Color(1.0, 0.85, 0.4))
 
 
 # --- Flow ------------------------------------------------------------------------
 
 func _on_docked(st: Station) -> void:
+	player.autopilot = false
 	var notes := GameState.turn_in(st.station_id)
+	sfx.play("dock_clamp", -2.0)
+	if not notes.is_empty():
+		sfx.play("mission_complete", -3.0)
+	GameState.save_game()
 	var tw := create_tween()
 	tw.tween_property(fade, "color:a", 1.0, 0.5)
 	tw.tween_callback(func(): _show_menu(st, notes))
@@ -327,21 +685,25 @@ func _on_docked(st: Station) -> void:
 func _show_menu(st: Station, notes: Array) -> void:
 	touch.reset()
 	menu.open(st, notes)
-	sfx.ui()
 
 
 func _launch() -> void:
 	var st: Station = player.dock_station
 	if st == null:
 		st = stations[GameState.last_station]
+	GameState.save_game()
+	sfx.play("launch", -2.0)
+	var tw0 := create_tween()
+	tw0.tween_property(menu, "modulate:a", 0.0, 0.25)
+	await tw0.finished
 	menu.visible = false
+	menu.modulate.a = 1.0
 	var tw := create_tween()
-	fade.color.a = 1.0
+	fade.color = Color(0, 0, 0, 1)
 	player.undock(st)
 	camera.snap()
 	tw.tween_property(fade, "color:a", 0.0, 0.7)
 	GameState.message.emit("Cleared for departure. Fly safe.", Color(0.6, 1.0, 0.75))
-	sfx.ui()
 
 
 func _on_player_died() -> void:
@@ -355,12 +717,16 @@ func _on_player_died() -> void:
 	tw.tween_property(fade, "color:a", 1.0, 0.8)
 	await tw.finished
 	GameState.on_player_destroyed()
+	if GameState.system_id != Galaxy.system_of(GameState.last_station) or not stations.has(GameState.last_station):
+		load_system(Galaxy.system_of(GameState.last_station))
 	var st: Station = stations[GameState.last_station]
 	player.dock_station = st
 	player.global_transform = st.undock_transform()
 	player.mode = PlayerShip.Mode.DOCKED
+	player.autopilot = false
 	player.shield = GameState.max_shield()
-	_show_menu(st, ["Your ship was destroyed. Insurance covered a new hull.", "Cargo lost, 10% of credits deducted."])
+	GameState.save_game()
+	_show_menu(st, ["Your ship was destroyed. Insurance covered a new hull. Cargo lost, 10% of credits deducted."])
 	var tw2 := create_tween()
 	tw2.tween_property(fade, "color:a", 0.0, 0.8)
 	_respawning = false

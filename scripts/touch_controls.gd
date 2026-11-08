@@ -15,6 +15,16 @@ var _boost_touch := -1
 var _throttle_touch := -1
 var _roll_touches := {}   # index -> -1 / +1
 var _action_flash := 0.0
+var _last_fire_tap := -10000
+
+signal map_tapped
+signal settings_tapped
+signal autopilot_tapped
+
+var autopilot_on := false
+var autopilot_ready := false
+var missile_ammo := -1     # -1 = no secondary weapon
+var _missile_flash := 0.0
 
 const STICK_R := 95.0
 const ACCENT := Color(0.55, 0.85, 1.0)
@@ -31,6 +41,10 @@ func _roll_c(side: int) -> Vector2: return Vector2(110 + (side + 1) * 75, size.y
 func _action_rect() -> Rect2: return Rect2(size.x - 330, size.y * 0.36, 250, 74)
 func _throttle_rect() -> Rect2: return Rect2(size.x - 72, 110, 46, size.y - 390)
 func _stick_home() -> Vector2: return Vector2(185, size.y - 165)
+func _map_rect() -> Rect2: return Rect2(size.x * 0.5 - 214, 12, 120, 50)
+func _auto_rect() -> Rect2: return Rect2(size.x * 0.5 - 82, 12, 164, 50)
+func _gear_rect() -> Rect2: return Rect2(size.x * 0.5 + 94, 12, 120, 50)
+func _missile_c() -> Vector2: return Vector2(size.x - 305, size.y - 236)
 
 
 func _input(event: InputEvent) -> void:
@@ -43,8 +57,23 @@ func _input(event: InputEvent) -> void:
 			if _action_rect().has_point(p) and action_label != "":
 				GameInput.queue_action()
 				_action_flash = 1.0
+			elif _map_rect().has_point(p):
+				map_tapped.emit()
+			elif _auto_rect().has_point(p):
+				autopilot_tapped.emit()
+			elif missile_ammo >= 0 and p.distance_to(_missile_c()) < 52.0:
+				GameInput.queue_missile()
+				_missile_flash = 1.0
+			elif _gear_rect().has_point(p):
+				settings_tapped.emit()
 			elif p.distance_to(_fire_c()) < 100.0:
 				_fire_touch = idx
+				var now := Time.get_ticks_msec()
+				if now - _last_fire_tap < 320:
+					GameInput.set_auto_fire(not GameInput.auto_fire)
+					_last_fire_tap = -10000
+				else:
+					_last_fire_tap = now
 			elif p.distance_to(_boost_c()) < 60.0:
 				_boost_touch = idx
 			elif _throttle_rect().grow(26).has_point(p):
@@ -114,11 +143,12 @@ func reset() -> void:
 
 func _process(delta: float) -> void:
 	_action_flash = maxf(0.0, _action_flash - delta * 3.0)
+	_missile_flash = maxf(0.0, _missile_flash - delta * 3.0)
 	queue_redraw()
 
 
 func _draw() -> void:
-	var font := ThemeDB.fallback_font
+	var font := UiKit.display(700)
 	var faint := Color(ACCENT, 0.18)
 	var line := Color(ACCENT, 0.45)
 	# stick
@@ -143,7 +173,37 @@ func _draw() -> void:
 	var firing := _fire_touch >= 0
 	draw_circle(fc, 84, Color(1.0, 0.35, 0.3, 0.35 if firing else 0.18))
 	draw_arc(fc, 84, 0, TAU, 48, Color(1.0, 0.5, 0.45, 0.7), 3.0, true)
-	_text(font, fc, "FIRE", 24, Color(1, 1, 1, 0.9))
+	_text(font, fc + Vector2(0, -8 if GameInput.auto_fire else 0), "FIRE", 24, Color(1, 1, 1, 0.9))
+	if GameInput.auto_fire:
+		var a0 := Time.get_ticks_msec() * 0.004
+		for k in 3:
+			draw_arc(fc, 94, a0 + k * TAU / 3.0, a0 + k * TAU / 3.0 + 1.2, 16, Color(1.0, 0.85, 0.4, 0.95), 4.0, true)
+		_text(font, fc + Vector2(0, 22), "AUTO", 16, Color(1.0, 0.85, 0.4))
+	else:
+		_text(font, fc + Vector2(0, 112), "double-tap: auto", 12, Color(1, 1, 1, 0.35))
+	# missiles
+	if missile_ammo >= 0:
+		var mc := _missile_c()
+		var has := missile_ammo > 0
+		draw_circle(mc, 46, Color(1.0, 0.7, 0.3, (0.18 if has else 0.06) + _missile_flash * 0.4))
+		draw_arc(mc, 46, 0, TAU, 36, Color(1.0, 0.75, 0.4, 0.75 if has else 0.3), 2.5, true)
+		_text(font, mc + Vector2(0, -8), "MSL", 17, Color(1, 1, 1, 0.9 if has else 0.4))
+		_text(font, mc + Vector2(0, 14), str(missile_ammo), 15, Color(1.0, 0.85, 0.5, 0.95 if has else 0.4))
+	# autopilot
+	var ar2 := _auto_rect()
+	var ap_col := UiKit.GOOD if autopilot_on else ACCENT
+	var pulse2 := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.005)
+	draw_rect(ar2, Color(ap_col, 0.12 + (0.18 * pulse2 if autopilot_on else 0.0)) if autopilot_on else Color(0.03, 0.06, 0.1, 0.55))
+	draw_rect(ar2, Color(ap_col, 0.9 if autopilot_on else (0.45 if autopilot_ready else 0.25)), false, 1.5 if not autopilot_on else 2.5)
+	_text(font, ar2.get_center(), "AUTOPILOT" if not autopilot_on else "AUTO ON", 15, Color(1, 1, 1, 0.9 if autopilot_ready or autopilot_on else 0.45))
+	# map + settings
+	for item in [[_map_rect(), "map", "MAP"], [_gear_rect(), "gear", ""]]:
+		var r: Rect2 = item[0]
+		draw_rect(r, Color(0.03, 0.06, 0.1, 0.55))
+		draw_rect(r, line, false, 1.5)
+		UiKit.icon(self, item[1], r.get_center() - Vector2(22 if item[2] != "" else 0, 0), 30, ACCENT, 2.0)
+		if item[2] != "":
+			_text(font, r.get_center() + Vector2(18, 0), item[2], 16, Color(1, 1, 1, 0.85))
 	# boost
 	var bc := _boost_c()
 	draw_circle(bc, 52, Color(ACCENT, 0.35 if _boost_touch >= 0 else 0.15))

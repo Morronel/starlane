@@ -5,12 +5,16 @@ The loop is short: dock, trade or take a contract, ride the space lane, fight ra
 
 ## What's in the prototype
 
-- **Tessaly system**: two stations, Halcyon Yard and Verdant Spire, plus Kessler Beacon, an asteroid field and a ringed gas giant.
-- **Arcade 6DOF flight** with chase camera, boost, auto-banking and speed dust.
-- **Space lane**: tap ENTER LANE near any gate, ride at 400–1200 m/s, steer inside the tube to overtake freighter traffic (collisions hurt), and tap EXIT at the exit you want, or DROP OUT anywhere.
-- **Combat**: raiders that make attack runs and break off, an elite in mission waves, aim assist with a lead indicator, shields that regenerate and a hull that needs repairs.
-- **Docking**: autopilot docking, then a station screen with a mission board (raider hunts and courier runs), a three-commodity market, a shipyard with 4 upgrade tracks, and repairs.
-- **Death**: insurance respawns you at the last station. You lose your cargo and 10% of your credits.
+- **Six star systems with eighteen stations.** Each system is a ~50 km stretch of space around one long, winding space lane, with three stations, a beacon, a salvage field and two or three stargates. Every system has its own sky, sun, planet and threat level.
+- **Space lanes** are wide glowing tubes you can join anywhere. Fly into one roughly along it and you merge automatically, or tap ENTER LANE when you are close. You ride at up to 1600 m/s (2300 with boost), dodge freighter traffic and drop out wherever you like.
+- **Destinations and autopilot.** Pick a station or a contract on the star map (or TRACK a contract at a station) and a marker shows where to go. AUTOPILOT flies there for you: it heads for the lane, rides it a bit slower than flat out, drops out, docks, and even jumps through stargates. Boost works without breaking it. Any stick input takes back control.
+- **Stargates** with limited fast travel. Each hop costs a jump charge. Refill at stations and carry more with Jump Capacitors.
+- **Hangar:** six ships, from the Sparrow interceptor to the Mule hauler and the Seraph. Trade in your current ship (60% back). Gear moves over where it fits.
+- **Outfit:** primary weapons (pulse lasers, ion repeater, scatter blaster, plasma lance, rail driver), secondary launchers with homing missiles and torpedoes, and utility gear (shields, armor, engines, cargo pods, tractor beam, nano-repair, afterburner, targeting computer, jump capacitors). Each ship has its own slot layout, and every station stocks different gear.
+- **Workshop:** salvage parts (scrap, circuits, plasma coils, lattice crystal, void shards) drop from raiders and drift in asteroid fields. Blueprints turn them into gear, including unique items like the Hellfire Repeater, Aegis Lattice and Ghost Drive. Rare blueprints drop from elite raiders or are sold at research stations.
+- **Combat:** raiders with attack runs and elites in mission waves, aim assist with a lead marker, homing missiles, and auto-attack (double-tap FIRE). Tense combat music kicks in while you're fighting.
+- **Station screen** with drag-anywhere kinetic scrolling (a drag never presses the button under your finger), animated cards, rolling credits, popups and sparkles.
+- **Progress is saved** automatically on dock, launch and jump. Saves from 0.2 carry over your credits, cargo, contracts and location.
 
 ## Controls
 
@@ -21,16 +25,18 @@ The loop is short: dock, trade or take a contract, ride the space lane, fight ra
 | Throttle | Slider on the right | Right stick Y, LB / RB | R F |
 | Fire | FIRE | A or RT | Space, right mouse |
 | Boost | BOOST | B or LT | Shift |
-| Lane / dock / exit | Context button | Y | T or Enter |
+| Lane / dock / exit / jump | Context button | Y | T or Enter |
+| Missiles | MSL | Right stick click | C or X |
+| Auto-attack | Double-tap FIRE | X | G |
+| Autopilot | AUTOPILOT button | Start | P |
+| Star map | MAP button | Back | M or Tab |
 
-## Art direction
+## Art and audio
 
-Everything is procedural, so there are no external assets to license:
-- Low-poly flat-shaded ships, stations, gates and rocks are generated in code (`scripts/models.gd`, `scripts/mesh_builder.gd`).
-- The nebula is baked once at startup into a panorama (`shaders/nebula_pano.gdshader`). The stars, sun, gas giant and atmosphere are shader billboards and spheres.
-- HDR glow (bloom) with ACES tonemapping, additive glowing lanes, and sounds made by a tiny synthesizer (`scripts/sfx.gd`).
-
-You can swap in CC0 models later (Kenney Space Kit, Quaternius Ultimate Spaceships) by replacing the mesh functions in `models.gd`.
+- Low-poly flat-shaded ships (six player hulls), stations, stargates, missiles, salvage canisters and rocks are generated in code (`scripts/models.gd`, `scripts/mesh_builder.gd`).
+- Each system bakes its own nebula panorama at startup (`shaders/nebula_pano.gdshader`). The stars, sun, planets and atmospheres are shaders.
+- Fonts: [Orbitron](https://fonts.google.com/specimen/Orbitron) and [Exo 2](https://fonts.google.com/specimen/Exo+2), under the SIL Open Font License (licenses in `assets/fonts/`).
+- All sound effects and the three music tracks (flight, station and combat) are synthesized offline by `tools/make_audio.py` (numpy + scipy + ffmpeg). It uses FM bells, supersaw pads, filtered noise and convolution reverb. To regenerate them, run `python3 tools/make_audio.py`.
 
 ## Building
 
@@ -45,5 +51,5 @@ For release signing, set `GODOT_ANDROID_KEYSTORE_RELEASE_PATH`, `_USER` and `_PA
 
 ## Dev tools
 
-- `godot --headless -- --simtest` runs a scripted gameplay check: lane ride, mission kill, docking payout, trade and respawn.
+- `godot --headless -- --simtest` runs a scripted gameplay check. It covers autopilot via the lane to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, an automatic lane merge, death and respawn, and save/load.
 - `godot -- --autotest=/some/dir` saves a set of screenshots from a scripted flight.

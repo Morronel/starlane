@@ -5,6 +5,7 @@ extends Node3D
 
 var station_id := "halcyon"
 var display_name := "Halcyon Yard"
+var kind := ""
 var accent := Color(0.25, 0.9, 1.0)
 var variant := 0
 

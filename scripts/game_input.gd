@@ -14,12 +14,19 @@ var fire := false
 var boost := false
 var throttle := 0.6            # 0..1, persistent
 var using_touch := false
+var auto_fire := false
+
+signal auto_fire_changed(on: bool)
+signal map_pressed
+signal autopilot_pressed
 
 var _action_queued := false
+var _missile_queued := false
 
 
 func _ready() -> void:
 	process_priority = -100
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_bind_keys("pitch_up", [KEY_S, KEY_DOWN])
 	_bind_keys("pitch_down", [KEY_W, KEY_UP])
 	_bind_keys("yaw_left", [KEY_A, KEY_LEFT])
@@ -31,6 +38,14 @@ func _ready() -> void:
 	_bind_keys("boost", [KEY_SHIFT])
 	_bind_keys("fire", [KEY_SPACE])
 	_bind_keys("action", [KEY_ENTER, KEY_T])
+	_bind_keys("auto_fire", [KEY_G])
+	_bind_keys("map", [KEY_M, KEY_TAB])
+	_bind_keys("missile", [KEY_C, KEY_X])
+	_bind_keys("autopilot", [KEY_P])
+	_bind_joy_button("missile", JOY_BUTTON_RIGHT_STICK)
+	_bind_joy_button("autopilot", JOY_BUTTON_START)
+	_bind_joy_button("auto_fire", JOY_BUTTON_X)
+	_bind_joy_button("map", JOY_BUTTON_BACK)
 	_bind_joy_button("fire", JOY_BUTTON_A)
 	_bind_joy_button("boost", JOY_BUTTON_B)
 	_bind_joy_button("action", JOY_BUTTON_Y)
@@ -65,11 +80,36 @@ func _input(event: InputEvent) -> void:
 		using_touch = false
 	if event.is_action_pressed("action"):
 		_action_queued = true
+	if event.is_action_pressed("auto_fire"):
+		set_auto_fire(not auto_fire)
+	if event.is_action_pressed("map"):
+		map_pressed.emit()
+	if event.is_action_pressed("missile"):
+		_missile_queued = true
+	if event.is_action_pressed("autopilot"):
+		autopilot_pressed.emit()
+
+
+func set_auto_fire(on: bool) -> void:
+	if on == auto_fire:
+		return
+	auto_fire = on
+	auto_fire_changed.emit(on)
 
 
 ## Called by UI buttons and the touch overlay.
 func queue_action() -> void:
 	_action_queued = true
+
+
+func queue_missile() -> void:
+	_missile_queued = true
+
+
+func consume_missile() -> bool:
+	var a := _missile_queued
+	_missile_queued = false
+	return a
 
 
 func consume_action() -> bool:
@@ -102,6 +142,8 @@ func _process(delta: float) -> void:
 			b = true
 
 	throttle = clampf(throttle + Input.get_axis("throttle_down", "throttle_up") * delta * 0.8, 0.0, 1.0)
+	if Settings.invert_pitch:
+		s.y = -s.y
 	stick = s.limit_length(1.0)
 	roll = clampf(r, -1.0, 1.0)
 	fire = f

@@ -12,6 +12,14 @@ var dust_mat: ShaderMaterial
 var env: Environment
 
 
+var nebula_mat: ShaderMaterial
+var nebula_vp: SubViewport
+var sun_light: DirectionalLight3D
+var fill_light: DirectionalLight3D
+var system_root: Node3D   # planet + sun, rebuilt per system
+var sky_data := {}
+
+
 func setup(cam: Camera3D) -> void:
 	camera = cam
 	_make_environment()
@@ -20,9 +28,29 @@ func setup(cam: Camera3D) -> void:
 	sky_root.name = "SkyRoot"
 	add_child(sky_root)
 	_make_stars()
+	_make_dust()
+
+
+## Re-skin the backdrop for a star system (see Galaxy.SYSTEMS[*].sky).
+func apply_system(sky: Dictionary) -> void:
+	sky_data = sky
+	sun_dir = (sky["sun"] as Vector3).normalized()
+	nebula_mat.set_shader_parameter("col_a", Vector3(sky["a"].r, sky["a"].g, sky["a"].b))
+	nebula_mat.set_shader_parameter("col_b", Vector3(sky["b"].r, sky["b"].g, sky["b"].b))
+	nebula_mat.set_shader_parameter("col_c", Vector3(sky["c"].r, sky["c"].g, sky["c"].b))
+	nebula_mat.set_shader_parameter("plane_normal", sky["plane"])
+	nebula_mat.set_shader_parameter("seed", sky["seed"])
+	nebula_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	sun_light.light_color = sky["sun_col"]
+	sun_light.look_at_from_position(Vector3.ZERO, -sun_dir, Vector3.UP if absf(sun_dir.y) < 0.95 else Vector3.RIGHT)
+	fill_light.light_color = (sky["b"] as Color).lerp(Color(0.5, 0.5, 0.8), 0.5)
+	fill_light.look_at_from_position(Vector3.ZERO, sun_dir + Vector3(0, -0.6, 0), Vector3.UP)
+	if system_root:
+		system_root.queue_free()
+	system_root = Node3D.new()
+	sky_root.add_child(system_root)
 	_make_planet()
 	_make_sun()
-	_make_dust()
 
 
 func _process(_delta: float) -> void:
@@ -85,6 +113,8 @@ func _bake_nebula() -> Texture2D:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/nebula_pano.gdshader")
 	rect.material = mat
+	nebula_mat = mat
+	nebula_vp = vp
 	vp.add_child(rect)
 	add_child(vp)
 	return vp.get_texture()
@@ -92,13 +122,15 @@ func _bake_nebula() -> Texture2D:
 
 func _make_light() -> void:
 	var sun := DirectionalLight3D.new()
+	sun_light = sun
 	sun.light_color = Color(1.0, 0.92, 0.82)
-	sun.light_energy = 1.8
+	sun.light_energy = 1.45
 	sun.shadow_enabled = false
 	add_child(sun)
 	sun.look_at_from_position(Vector3.ZERO, -sun_dir, Vector3.UP)
 	# cool rim/fill from the nebula side
 	var fill := DirectionalLight3D.new()
+	fill_light = fill
 	fill.light_color = Color(0.45, 0.4, 0.9)
 	fill.light_energy = 0.22
 	fill.light_specular = 0.2
@@ -143,9 +175,9 @@ func _make_stars() -> void:
 
 
 func _make_planet() -> void:
-	var dir := Vector3(0.55, -0.22, -0.8).normalized()
+	var dir: Vector3 = (sky_data["planet_dir"] as Vector3).normalized()
 	var dist := SKY_DIST * 0.6
-	var radius := dist * 0.17
+	var radius: float = dist * float(sky_data["planet_size"])
 	var sphere := SphereMesh.new()
 	sphere.radius = radius
 	sphere.height = radius * 2.0
@@ -156,11 +188,14 @@ func _make_planet() -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/planet.gdshader")
 	mat.set_shader_parameter("sun_dir", sun_dir)
+	for k in ["p1", "p2", "p3"]:
+		var c: Color = sky_data[k]
+		mat.set_shader_parameter("c" + k.substr(1), Vector3(c.r, c.g, c.b))
 	planet.material_override = mat
 	planet.position = dir * dist
 	planet.rotation = Vector3(0.35, 0.0, 0.25)
 	planet.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	sky_root.add_child(planet)
+	system_root.add_child(planet)
 
 	var atmo_mesh := SphereMesh.new()
 	atmo_mesh.radius = radius * 1.06
@@ -172,11 +207,15 @@ func _make_planet() -> void:
 	var am := ShaderMaterial.new()
 	am.shader = load("res://shaders/atmosphere.gdshader")
 	am.set_shader_parameter("sun_dir", sun_dir)
+	var pc: Color = (sky_data["p3"] as Color).lerp(sky_data["sun_col"], 0.5)
+	am.set_shader_parameter("tint", Vector3(pc.r, pc.g, pc.b))
 	atmo.material_override = am
 	atmo.position = planet.position
 	atmo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	sky_root.add_child(atmo)
+	system_root.add_child(atmo)
 
+	if not sky_data["rings"]:
+		return
 	# thin ring system
 	var ring := MeshBuilder.new()
 	ring.xform = Transform3D(Basis(Vector3(1, 0, 0.3).normalized(), 0.35), Vector3.ZERO)
@@ -187,7 +226,7 @@ func _make_planet() -> void:
 		for band in [[1.35, 1.55, 0.55], [1.6, 1.95, 0.85], [2.0, 2.1, 0.35]]:
 			var r0: float = radius * band[0]
 			var r1: float = radius * band[1]
-			var c := Color(0.75, 0.62, 0.5) * float(band[2])
+			var c: Color = (sky_data["p1"] as Color).lerp(Color(0.8, 0.75, 0.7), 0.4) * float(band[2])
 			ring.quad("glow", Vector3(cos(a0) * r0, 0, sin(a0) * r0), Vector3(cos(a1) * r0, 0, sin(a1) * r0),
 				Vector3(cos(a1) * r1, 0, sin(a1) * r1), Vector3(cos(a0) * r1, 0, sin(a0) * r1), c, Vector3(0, -1, 0))
 	var rm := StandardMaterial3D.new()
@@ -201,7 +240,7 @@ func _make_planet() -> void:
 	rmi.mesh = ring.build({"glow": rm})
 	rmi.position = planet.position
 	rmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	sky_root.add_child(rmi)
+	system_root.add_child(rmi)
 
 
 func _make_sun() -> void:
@@ -211,12 +250,14 @@ func _make_sun() -> void:
 	mi.mesh = q
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/sun.gdshader")
+	var sc: Color = sky_data["sun_col"]
+	mat.set_shader_parameter("color", Vector3(sc.r, sc.g, sc.b))
 	mi.material_override = mat
 	mi.position = sun_dir * SKY_DIST * 0.9
 	mi.scale = Vector3.ONE * SKY_DIST * 0.22
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.custom_aabb = AABB(Vector3(-1, -1, -1), Vector3(2, 2, 2))
-	sky_root.add_child(mi)
+	system_root.add_child(mi)
 
 
 func _make_dust() -> void:
