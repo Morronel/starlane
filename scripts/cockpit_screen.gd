@@ -119,7 +119,7 @@ func _status(s: Vector2) -> void:
 	draw_string(UiKit.display(600), Vector2(18 + font.get_string_size(spd, 0, -1, 44).x, 70), "M/S", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(accent, 0.8))
 	var flag := ""
 	if player.mode == PlayerShip.Mode.LANE:
-		flag = "LANE"
+		flag = "HWY" if player.lane.kind == "highway" else "ROAD"
 	if player.autopilot:
 		flag = "AUTO" if flag == "" else flag + " · AUTO"
 	if flag != "":

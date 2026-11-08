@@ -8,6 +8,8 @@ var messages: Array = []   # {text, color, t}
 var damage_flash := 0.0
 
 const CY := Color(0.55, 0.88, 1.0)
+const ROAD := Color(0.5, 0.88, 1.0)
+const HWY := Color(1.0, 0.8, 0.42)
 
 
 func _ready() -> void:
@@ -122,7 +124,7 @@ func _glass_hud(p: PlayerShip) -> void:
 	# mode flags under the crosshair
 	var flag := ""
 	if p.mode == PlayerShip.Mode.LANE:
-		flag = "LANE"
+		flag = SpaceLane.KINDS[p.lane.kind]["label"]
 	if p.autopilot:
 		flag = "AUTOPILOT" if flag == "" else flag + "  ·  AUTOPILOT"
 	if p.boost_energy < 0.99 and GameInput.boost:
@@ -176,15 +178,17 @@ func _nav(font: Font, p: PlayerShip, cam: Camera3D) -> void:
 	for st in get_tree().get_nodes_in_group("stations"):
 		var s := st as Station
 		_marker(font, cam, s.global_position, s.display_name, s.accent, p, "diamond")
-	if p.mode == PlayerShip.Mode.FLIGHT and world.lane:
-		for e in world.lane.exits:
-			var pos: Vector3 = world.lane.curve.sample_baked(e["s"], true)
-			if pos.distance_to(p.global_position) < 9000.0:
-				_marker(font, cam, pos, "Lane: " + e["name"], Color(0.4, 0.9, 1.0), p, "ring")
-		# nearest point on the lane: you can merge anywhere
-		var c: Dictionary = world.lane.closest(p.global_position)
-		if c["dist"] > SpaceLane.RADIUS and c["dist"] < 15000.0:
-			_marker(font, cam, c["pos"], "Space lane", Color(0.4, 0.9, 1.0, 0.8), p, "ring")
+	if p.mode == PlayerShip.Mode.FLIGHT and world.net:
+		for nd in world.net.nodes:
+			if nd["kind"] == "poi":
+				continue
+			if (nd["pos"] as Vector3).distance_to(p.global_position) < 14000.0:
+				_marker(font, cam, nd["pos"], nd["name"], HWY if nd["kind"] == "hub" else ROAD, p, "ring")
+		# nearest point on a road and on a highway: you can merge anywhere
+		for pair in [[world.near_road, "Road", ROAD], [world.near_highway, "Highway", HWY]]:
+			var c: Dictionary = pair[0]
+			if not c.is_empty() and c["dist"] > (c["track"] as SpaceLane).radius and c["dist"] < 16000.0:
+				_marker(font, cam, c["pos"], pair[1], Color(pair[2], 0.85), p, "track")
 	for l in get_tree().get_nodes_in_group("loot"):
 		if l.global_position.distance_to(p.global_position) < 2500.0:
 			_marker(font, cam, l.global_position, "", Color(0.45, 1.0, 0.6) if l.blueprint == "" else Color(0.85, 0.6, 1.0), p, "loot")
@@ -209,6 +213,9 @@ func _marker(font: Font, cam: Camera3D, pos: Vector3, label: String, col: Color,
 				draw_polyline(pts, col, 2.0, true)
 			"ring", "gate":
 				draw_arc(sp, 11, 0, TAU, 24, col, 2.0, true)
+			"track":
+				draw_line(sp + Vector2(-14, 0), sp + Vector2(14, 0), col, 3.0, true)
+				draw_arc(sp, 7, 0, TAU, 16, col, 1.5, true)
 			"small":
 				draw_rect(Rect2(sp - Vector2(7, 7), Vector2(14, 14)), Color(col, 0.8), false, 1.5)
 			"loot":
@@ -294,30 +301,87 @@ func _destination(font: Font, p: PlayerShip, cam: Camera3D) -> void:
 
 
 func _lane_info(font: Font, p: PlayerShip) -> void:
-	var lane: SpaceLane = world.lane
-	var ne := lane.next_exit(p.lane_s, p.lane_dir)
-	var y := 128.0
-	_text(font, Vector2(size.x * 0.5, y), "SPACE LANE", 18, Color(0.5, 0.9, 1.0, 0.8))
-	if not ne.is_empty():
-		var t := "Next exit: %s  %s" % [ne["name"], _fmt_dist(ne["dist"])]
-		_text(font, Vector2(size.x * 0.5, y + 30), t, 24, Color(1, 1, 1))
-	# lane progress strip
-	var w := 420.0
-	var x0 := size.x * 0.5 - w * 0.5
-	var yy := y + 56
-	draw_line(Vector2(x0, yy), Vector2(x0 + w, yy), Color(0.5, 0.9, 1.0, 0.4), 2.0)
-	for e in lane.exits:
-		var ex: float = x0 + w * e["s"] / lane.length
-		draw_circle(Vector2(ex, yy), 5, Color(0.5, 0.9, 1.0))
-		var idx: int = lane.exits.find(e)
-		_text(font, Vector2(ex, yy + (18 if idx % 2 == 0 else 34)), e["name"].replace("Gate to ", "> "), 12, Color(1, 1, 1, 0.65))
-	var dt: Dictionary = world.dest_target()
-	if not dt.is_empty():
-		var ds: float = lane.closest(dt["goal"])["s"]
-		var dx: float = x0 + w * ds / lane.length
-		draw_colored_polygon(PackedVector2Array([Vector2(dx, yy - 8), Vector2(dx + 8, yy), Vector2(dx, yy + 8), Vector2(dx - 8, yy)]), DEST_COL)
-	var px: float = x0 + w * p.lane_s / lane.length
-	draw_colored_polygon(PackedVector2Array([Vector2(px, yy - 4), Vector2(px - 6, yy - 14), Vector2(px + 6, yy - 14)]), Color(1, 0.9, 0.5))
+	var lane: SpaceLane = p.lane
+	if lane == null:
+		return
+	var hw := lane.kind == "highway"
+	var col := HWY if hw else ROAD
+	var sp: Dictionary = lane.spec()
+	var y := 122.0
+	var cx := size.x * 0.5
+	var end_s: float = lane.length if p.lane_dir > 0 else 0.0
+	var where: String = world.net.node_name(world.net.end_node(lane, p.lane_dir))
+	_text(UiKit.display(700, 4), Vector2(cx, y), "GRAND HIGHWAY" if hw else "ROAD", 18, Color(col, 0.9))
+	_text(font, Vector2(cx, y + 28), "%s  %s" % [where, _fmt_dist(absf(end_s - p.lane_s))], 22, Color(1, 1, 1))
+	# speed tier strip: free flight | road | highway, with a pip for our speed
+	var w := 360.0
+	var x0 := cx - w * 0.5
+	var yy := y + 54.0
+	var vmax := 5600.0
+	var tiers := [[0.0, 320.0, Color(1, 1, 1, 0.35)], [320.0, 1300.0, ROAD], [1300.0, vmax, HWY]]
+	for t in tiers:
+		var a: float = x0 + w * sqrt(t[0] / vmax)
+		var b: float = x0 + w * sqrt(t[1] / vmax)
+		draw_line(Vector2(a + 2, yy), Vector2(b - 2, yy), Color(t[2], 0.45), 4.0)
+	var px: float = x0 + w * sqrt(clampf(p.speed, 0.0, vmax) / vmax)
+	draw_colored_polygon(PackedVector2Array([Vector2(px, yy - 4), Vector2(px - 6, yy - 14), Vector2(px + 6, yy - 14)]), Color(1, 0.95, 0.7))
+	_junction(font, p, Vector2(170.0, 190.0))
+	_drift_gauge(p, lane, Vector2(cx, size.y - 130.0))
+
+
+## Upcoming junction: one arrow per branch in the direction it leaves, the one
+## we'll take (lean that way inside the tube, or let the autopilot pick) lit up.
+func _junction(font: Font, p: PlayerShip, c: Vector2) -> void:
+	var j: Dictionary = p.junction
+	if j.is_empty():
+		return
+	var title := "%s  %s" % [j["name"].to_upper(), _fmt_dist(j["dist"])]
+	_text(UiKit.display(600), c, title, 14, Color(1, 1, 1, 0.8))
+	var cc := c + Vector2(0, 58)
+	draw_arc(cc, 34, 0, TAU, 32, Color(1, 1, 1, 0.18), 1.5, true)
+	var opts: Array = j["options"]
+	for i in opts.size():
+		var o: Dictionary = opts[i]
+		var d: Vector2 = o["dir2"]
+		if d.length() < 0.12:
+			d = Vector2(0, -1)   # straight on: point up
+		d = d.normalized()
+		var picked: bool = i == j["pick"]
+		var oc: Color = HWY if o["kind"] == "highway" else ROAD
+		oc = Color(oc, 1.0 if picked else 0.4)
+		var tip := cc + d * (34.0 if picked else 28.0)
+		var perp := Vector2(-d.y, d.x)
+		draw_line(cc + d * 8.0, tip, oc, 5.0 if o["kind"] == "highway" else 2.5, true)
+		draw_colored_polygon(PackedVector2Array([tip + d * 9.0, tip + perp * 6.0, tip - perp * 6.0]), oc)
+		if picked:
+			var lab := "%s to %s" % ["HWY" if o["kind"] == "highway" else "Road", o["name"]]
+			_text(font, cc + Vector2(0, 58), lab, 17, oc)
+	if j["pick"] < 0:
+		var msg := "Stay centred to stop here" if j["kind"] == "poi" else "Lean toward a branch to take it"
+		_text(font, cc + Vector2(0, 58), msg if opts.size() > 0 else "End of the road", 16, Color(1, 1, 1, 0.75))
+	elif not p.autopilot:
+		_text(font, cc + Vector2(0, 80), "lean inside the tube to choose", 12, Color(1, 1, 1, 0.45))
+
+
+## Cross-section of the tube: where we are inside it and how hard the turn
+## pushes us outward. Red when we're close to being thrown off.
+func _drift_gauge(p: PlayerShip, lane: SpaceLane, c: Vector2) -> void:
+	var r := 46.0
+	var off := Vector2(p.lane_offset.x * p.lane_dir, -p.lane_offset.y) / lane.radius
+	var danger := clampf((off.length() - 0.6) / 0.35, 0.0, 1.0)
+	var ring_col := Color(1, 1, 1, 0.3).lerp(Color(1.0, 0.3, 0.25, 0.9), danger)
+	draw_circle(c, r, Color(0, 0, 0, 0.25))
+	draw_arc(c, r, 0, TAU, 40, ring_col, 2.0 + danger * 2.0, true)
+	var push := Vector2(p.drift_push.x * p.lane_dir, -p.drift_push.y) / float(lane.spec()["steer"])
+	var dot := c + off * r
+	if push.length() > 0.05:
+		var pc := Color(1.0, 0.75, 0.3, 0.9) if push.length() < 0.9 else Color(1.0, 0.3, 0.25, 0.95)
+		var tip := dot + push.limit_length(1.6) * r * 0.6
+		draw_line(dot, tip, pc, 2.5, true)
+		var d := (tip - dot).normalized()
+		draw_colored_polygon(PackedVector2Array([tip + d * 6.0, tip + Vector2(-d.y, d.x) * 4.0, tip - Vector2(-d.y, d.x) * 4.0]), pc)
+	draw_circle(dot, 5.0, Color(0.6, 1.0, 0.75))
+	UiKit.text_c(self, UiKit.display(600), c + Vector2(0, r + 16), "TURN PUSH" if push.length() > 0.2 else "IN THE TUBE", 11, Color(1, 1, 1, 0.55), false)
 
 
 func _messages(font: Font) -> void:

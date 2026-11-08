@@ -34,12 +34,14 @@ var _shape: CollisionShape3D
 var autopilot := false
 var ap_goal := Vector3.ZERO
 var ap_arrive_slow := true      # slow down near the goal (stations / beacon)
-var ap_lane_exit_s := -1.0      # in a lane: drop out around this s
+var ap_lane_exit_s := -1.0      # on a track: drop out around this s
+var ap_route: Array = []        # planned rides [{track, dir, enter_s, exit_s}], first = current
 var _lane_was_inside := false
 var _merge_cd := 0.0
 
-# lane
-var lane: SpaceLane
+# roads and highways
+var net: RoadNet
+var lane: SpaceLane             # the track we're riding (null in free flight)
 var lane_s := 0.0
 var lane_dir := 1
 var lane_offset := Vector2.ZERO
@@ -177,6 +179,7 @@ func set_autopilot(on: bool, why := "") -> void:
 		return
 	autopilot = on
 	ap_lane_exit_s = -1.0
+	ap_route = []
 	world.on_autopilot_changed(on, why)
 
 
@@ -305,39 +308,45 @@ func fire_missile() -> bool:
 	return false
 
 
-# --- Lane ---------------------------------------------------------------------
+# --- Roads and highways ------------------------------------------------------------
 
 func can_enter_lane() -> Dictionary:
-	if mode != Mode.FLIGHT or lane == null:
+	if mode != Mode.FLIGHT or net == null:
 		return {}
-	var c := lane.closest(global_position)
-	if c["dist"] > SpaceLane.MERGE_RANGE:
+	var c := net.closest(global_position, 700.0)
+	if c.is_empty() or c["dist"] > (c["track"] as SpaceLane).spec()["merge"]:
 		return {}
 	return c
 
 
-## Merge automatically when flying into the tube roughly along it.
+## Merge automatically when flying into a tube roughly along it.
 func _check_merge() -> void:
-	if lane == null:
+	if net == null:
 		return
-	var c := lane.closest(global_position)
-	var inside: bool = c["dist"] < SpaceLane.RADIUS * 0.85
+	var c := net.closest(global_position, 0.0)
+	var inside: bool = not c.is_empty() and c["dist"] < (c["track"] as SpaceLane).radius * 0.85
 	if inside and not _lane_was_inside and _merge_cd <= 0.0 and speed > 25.0 and not autopilot:
-		var f := lane.frame(c["s"])
+		var t: SpaceLane = c["track"]
+		var f := t.frame(c["s"])
 		var d: float = (-global_transform.basis.z).dot(f["fwd"])
 		if absf(d) > 0.6:
-			enter_lane(1 if d > 0.0 else -1, true)
+			enter_lane(1 if d > 0.0 else -1, true, t)
 			return
 	_lane_was_inside = inside
 
 
-## Enter the lane where we are. dir 0 = pick from where the nose points.
-func enter_lane(dir := 0, merged := false) -> void:
-	if mode != Mode.FLIGHT or lane == null:
+## Enter the nearest road / highway where we are (or `track` if given).
+## dir 0 = pick from where the nose points.
+func enter_lane(dir := 0, merged := false, track: SpaceLane = null) -> void:
+	if mode != Mode.FLIGHT or net == null:
 		return
-	var c := lane.closest(global_position)
-	if c["dist"] > SpaceLane.MERGE_RANGE and not merged:
+	var c := track.closest(global_position) if track else net.closest(global_position, 700.0)
+	if c.is_empty():
 		return
+	var t: SpaceLane = c["track"]
+	if c["dist"] > t.spec()["merge"] and not merged:
+		return
+	lane = t
 	lane_s = c["s"]
 	var f := lane.frame(lane_s)
 	var fwd := -global_transform.basis.z
@@ -350,39 +359,117 @@ func enter_lane(dir := 0, merged := false) -> void:
 	lane_dir = dir
 	# start inside the tube near where we are
 	var rel: Vector3 = global_position - f["origin"]
-	lane_offset = Vector2(rel.dot(f["right"]), rel.dot(f["up"])).limit_length(SpaceLane.RADIUS * 0.7)
+	lane_offset = Vector2(rel.dot(f["right"]), rel.dot(f["up"])).limit_length(lane.radius * 0.7)
 	lane_speed = maxf(speed, 200.0)
+	_ride_basis = global_transform.basis
+	junction = {}
 	mode = Mode.LANE
 	_lane_was_inside = true
 	lane_changed.emit(true)
 	if not autopilot:
-		var ne := lane.next_exit(lane_s, lane_dir)
-		var where: String = ("toward " + ne["name"]) if not ne.is_empty() else ""
-		GameState.message.emit(("Merged into the lane " if merged else "Lane engaged ") + where, Color(0.5, 0.9, 1.0))
+		var where := net.node_name(net.end_node(lane, lane_dir))
+		GameState.message.emit("%s %s toward %s" % ["Merged onto the" if merged else "Joined the", lane.kind, where], Color(0.5, 0.9, 1.0))
+
+
+## Junction preview for the HUD: {node, kind, dist, options: [branch + dir2], pick: index or -1}.
+var junction := {}
+
+
+func _update_junction() -> void:
+	var end_s: float = lane.length if lane_dir > 0 else 0.0
+	var rem := absf(end_s - lane_s)
+	var look := maxf(2500.0, lane_speed * 4.0)
+	if rem > look:
+		junction = {}
+		return
+	var n := net.end_node(lane, lane_dir)
+	var brs := net.branches(lane, lane_dir)
+	var f := lane.frame(end_s)
+	var ship_right: Vector3 = f["right"] * lane_dir
+	var ship_up: Vector3 = f["up"]
+	var in_fwd: Vector3 = f["fwd"] * lane_dir
+	for b in brs:
+		b["dir2"] = Vector2((b["out"] as Vector3).dot(ship_right), -(b["out"] as Vector3).dot(ship_up))
+		# going straight on prefers staying on the same kind of track
+		b["straight"] = (b["out"] as Vector3).dot(in_fwd) + (0.6 if b["kind"] == lane.kind else 0.0)
+	var pick := -1
+	if autopilot:
+		if ap_route.size() > 1:
+			for i in brs.size():
+				if brs[i]["track"] == ap_route[1]["track"]:
+					pick = i
+	else:
+		# lean toward a branch inside the tube to take it; stay centred to go
+		# straight on (or to stop at a station / gate / beacon)
+		var off := Vector2(lane_offset.x * lane_dir, -lane_offset.y) / lane.radius
+		if off.length() > 0.3:
+			var best := 0.15
+			for i in brs.size():
+				var sc: float = off.normalized().dot((brs[i]["dir2"] as Vector2).normalized()) * minf(1.0, (brs[i]["dir2"] as Vector2).length() * 4.0)
+				if sc > best:
+					best = sc
+					pick = i
+		if pick < 0 and net.nodes[n]["kind"] != "poi":
+			var best_s := -2.0
+			for i in brs.size():
+				if brs[i]["straight"] > best_s:
+					best_s = brs[i]["straight"]
+					pick = i
+	junction = {"node": n, "name": net.node_name(n), "kind": net.nodes[n]["kind"], "dist": rem, "options": brs, "pick": pick}
 
 
 func _lane_ride(delta: float) -> void:
 	var inp := GameInput
 	if autopilot and (inp.stick.length() > 0.35 or absf(inp.roll) > 0.5):
 		set_autopilot(false, "Manual override: autopilot off")
+	if autopilot and not ap_route.is_empty() and ap_route[0]["track"] == lane:
+		var es: float = ap_route[0]["exit_s"]
+		var endp: float = lane.length if lane_dir > 0 else 0.0
+		ap_lane_exit_s = -1.0 if (ap_route.size() > 1 and absf(es - endp) < 5.0) else es
+	var sp := lane.spec()
 	var boosting: bool = inp.boost
 	var steer: Vector2 = inp.stick
-	var target_speed: float = 500.0 + 1100.0 * inp.throttle + (700.0 if boosting else 0.0)
+	var target_speed: float = sp["min"] + (sp["speed"] - sp["min"]) * inp.throttle + (sp["boost"] if boosting else 0.0)
 	if autopilot:
-		# a bit slower than a pilot flying flat out, but boost still works
-		target_speed = 1250.0 + (700.0 if boosting else 0.0)
-		var want := Vector2(0, SpaceLane.RADIUS * 0.55)
-		var ahead := lane.traffic_near(lane_s, lane_dir, lane_offset, 500.0)
-		if not ahead.is_empty():
-			want = Vector2(-(ahead["offset"] as Vector2).x, SpaceLane.RADIUS * 0.6)
-		var d := want - lane_offset
-		steer = Vector2(d.x * lane_dir, d.y).limit_length(40.0) / 40.0
-	lane_speed = lerpf(lane_speed, target_speed, 1.0 - exp(-delta * 0.9))
+		# a bit slower than a pilot flying flat out, and it eases off for the
+		# sharp turns ahead; boost still works where it's safe
+		var k := lane.max_curvature_ahead(lane_s, lane_dir, maxf(lane_speed * 2.5, 800.0))
+		target_speed = minf(sp["ap"] + (sp["boost"] * 0.6 if boosting else 0.0), lane.safe_speed(k))
+	if lane_speed > target_speed + 150.0:
+		lane_speed = move_toward(lane_speed, target_speed, delta * maxf(2500.0, lane_speed * 0.9))   # braking
+	else:
+		lane_speed = lerpf(lane_speed, target_speed, 1.0 - exp(-delta * float(sp["accel"])))
 	var s_prev := lane_s
 	lane_s += lane_dir * lane_speed * delta
-	# lane right flips when travelling backwards
-	lane_offset += Vector2(steer.x * lane_dir, steer.y) * 230.0 * delta
-	lane_offset = lane_offset.limit_length(SpaceLane.RADIUS - 12.0)
+
+	# turns push you toward the outside wall
+	var v_eff := minf(lane_speed, sp["speed"] + sp["boost"])
+	var push := lane.drift(clampf(lane_s, 0.0, lane.length), v_eff)
+	drift_push = push
+	_update_junction()
+	var steer_v: Vector2
+	if autopilot:
+		var want := Vector2(0, lane.radius * 0.3)
+		if not junction.is_empty() and junction["pick"] >= 0 and junction["dist"] < 1800.0:
+			var d2: Vector2 = junction["options"][junction["pick"]]["dir2"]
+			if d2.length() > 0.12:
+				want = Vector2(d2.x * lane_dir, -d2.y).normalized() * lane.radius * 0.45
+		var ahead := lane.traffic_near(lane_s, lane_dir, lane_offset, maxf(500.0, lane_speed * 0.5))
+		if not ahead.is_empty():
+			want = Vector2(-(ahead["offset"] as Vector2).x, lane.radius * 0.35)
+		steer_v = ((want - lane_offset) * 1.5 - push + lane_offset / lane.radius * float(sp["steer"]) * 0.55).limit_length(sp["steer"])
+		steer = Vector2(steer_v.x * lane_dir, steer_v.y) / float(sp["steer"])
+	else:
+		# lane right flips when travelling backwards
+		steer_v = Vector2(steer.x * lane_dir, steer.y) * float(sp["steer"])
+	# the tube gently pulls you back toward the middle, harder near the wall,
+	# so easy turns ride themselves and only sharp ones at speed need a hand
+	var centre := -lane_offset / lane.radius * float(sp["steer"]) * 0.55
+	lane_offset += (steer_v + push + centre) * delta
+
+	if lane_offset.length() > lane.radius - 6.0:
+		_thrown_off()
+		return
 
 	if autopilot and ap_lane_exit_s >= 0.0 and (ap_lane_exit_s - lane_s) * lane_dir < lane_speed * 0.6:
 		_leave_lane(true)
@@ -403,18 +490,71 @@ func _lane_ride(delta: float) -> void:
 
 	if lane_s <= 0.0 or lane_s >= lane.length:
 		lane_s = clampf(lane_s, 0.0, lane.length)
-		_leave_lane(true)
+		var pick: int = junction.get("pick", -1)
+		if junction.is_empty() or pick < 0:
+			var where := net.node_name(net.end_node(lane, lane_dir))
+			_leave_lane(false)
+			GameState.message.emit("End of the %s: %s" % [lane_kind_word(), where], Color(0.5, 0.9, 1.0))
+			return
+		_switch_track(junction["options"][pick])
 		return
 
 	var f := lane.frame(lane_s)
 	var fwd: Vector3 = f["fwd"] * lane_dir
 	var pos: Vector3 = f["origin"] + f["right"] * lane_offset.x + f["up"] * lane_offset.y
-	var b := Basis.looking_at(fwd, f["up"])
-	bank = lerpf(bank, -steer.x * 0.5, 1.0 - exp(-delta * 4.0))
+	var want_b := Basis.looking_at(fwd, f["up"])
+	_ride_basis = _ride_basis.slerp(want_b, 1.0 - exp(-delta * 9.0)).orthonormalized()
+	# lean into the push of the turn
+	var lean := Vector2(push.x * lane_dir, push.y) / float(sp["steer"])
+	bank = lerpf(bank, -steer.x * 0.5 + lean.x * 0.35, 1.0 - exp(-delta * 4.0))
 	model.rotation = Vector3(steer.y * 0.15, 0, bank)
 	velocity = fwd * lane_speed
 	speed = lane_speed
-	global_transform = Transform3D(b, pos)
+	global_transform = Transform3D(_ride_basis, pos)
+
+
+var drift_push := Vector2.ZERO
+var _ride_basis := Basis.IDENTITY
+
+
+func lane_kind_word() -> String:
+	return lane.kind if lane else "lane"
+
+
+## Carry on through a junction onto another track.
+func _switch_track(b: Dictionary) -> void:
+	var end_s: float = lane.length if lane_dir > 0 else 0.0
+	var wp := lane.lane_to_world(end_s, lane_offset)
+	var old_kind := lane.kind
+	lane = b["track"]
+	lane_dir = b["dir"]
+	lane_s = b["s"]
+	var nf := lane.frame(lane_s)
+	var rel: Vector3 = wp - nf["origin"]
+	lane_offset = Vector2(rel.dot(nf["right"]), rel.dot(nf["up"])).limit_length(lane.radius * 0.55)
+	junction = {}
+	if autopilot and ap_route.size() > 1 and ap_route[1]["track"] == lane:
+		ap_route.pop_front()
+	world.sfx.play("lane_merge", -7.0)
+	if old_kind != lane.kind:
+		world.shake(0.5 if lane.kind == "road" else 0.3)
+		GameState.message.emit(("Onto the HIGHWAY toward %s" if lane.kind == "highway" else "Off the highway: road to %s") % b["name"], Color(1.0, 0.85, 0.5) if lane.kind == "highway" else Color(0.5, 0.9, 1.0))
+	elif not autopilot:
+		GameState.message.emit("%s to %s" % [lane.kind.capitalize(), b["name"]], Color(0.5, 0.9, 1.0))
+
+
+func _thrown_off() -> void:
+	var word := lane_kind_word()
+	lane_offset = lane_offset.limit_length(lane.radius - 6.0)
+	var f := lane.frame(lane_s)
+	global_transform = Transform3D(_ride_basis, f["origin"] + f["right"] * lane_offset.x + f["up"] * lane_offset.y)
+	_leave_lane(false)
+	_merge_cd = 3.0
+	speed = top_speed() * 1.5
+	velocity = -global_transform.basis.z * speed
+	world.shake(1.2)
+	world.sfx.play("hit_hull", -6.0)
+	GameState.message.emit("Thrown off the %s! Hold the inside line in turns." % word, Color(1.0, 0.6, 0.35))
 
 
 func exit_lane() -> void:
@@ -426,16 +566,19 @@ func _leave_lane(announce: bool) -> void:
 	mode = Mode.FLIGHT
 	_merge_cd = 2.0
 	ap_lane_exit_s = -1.0
+	ap_route = []
+	junction = {}
+	drift_push = Vector2.ZERO
 	speed = top_speed() * 0.9
 	velocity = -global_transform.basis.z * speed
 	ang_vel = Vector3.ZERO
 	lane_changed.emit(false)
 	if announce:
 		var e := lane.nearest_entry(global_position)
-		if not e.is_empty() and e["dist"] < 500.0:
+		if not e.is_empty() and e["dist"] < 900.0:
 			GameState.message.emit("Dropped out at %s" % e["name"], Color(0.5, 0.9, 1.0))
 		else:
-			GameState.message.emit("Dropped out of the lane", Color(0.5, 0.9, 1.0))
+			GameState.message.emit("Dropped out of the %s" % lane.kind, Color(0.5, 0.9, 1.0))
 
 
 # --- Docking ------------------------------------------------------------------

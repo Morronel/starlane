@@ -474,7 +474,7 @@ func _offer_missions() -> void:
 		missions.append({
 			"id": mission_counter, "kind": "hunt", "state": "offered", "system": sid,
 			"title": "Raider nest in %s" % Galaxy.SYSTEMS[sid]["name"],
-			"desc": "Raiders are preying on lane traffic near the beacon in %s. Drop out at the beacon and destroy %d raiders." % [Galaxy.SYSTEMS[sid]["name"], n],
+			"desc": "Raiders are preying on road traffic near the beacon in %s. Drop out at the beacon and destroy %d raiders." % [Galaxy.SYSTEMS[sid]["name"], n],
 			"count": n, "left": n, "reward": 800 + n * 260 + threat * 400, "station": "",
 		})
 		hunts += 1

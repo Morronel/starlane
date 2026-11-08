@@ -98,22 +98,64 @@ func _run() -> void:
 	await _wait(2.5)
 	await _shot("06_launch_destination")
 	var p: PlayerShip = main.player
-	# approaching the lane from the side: merge anywhere
-	var f: Dictionary = main.lane.frame(main.lane.length * 0.25)
-	var start: Vector3 = f["origin"] + f["right"] * 520.0 + f["up"] * 60.0
-	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 900.0 - start).normalized(), Vector3.UP), start)
+	# approaching a highway from the side: merge anywhere
+	var hwy: SpaceLane = null
+	var road: SpaceLane = null
+	for t in main.net.tracks:
+		if t.kind == "highway" and hwy == null:
+			hwy = t
+		if t.kind == "road" and road == null and t.length > 9000.0:
+			road = t
+	var f: Dictionary = hwy.frame(hwy.length * 0.35)
+	var start: Vector3 = f["origin"] + f["right"] * 1400.0 + f["up"] * 250.0
+	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 2500.0 - start).normalized(), Vector3.UP), start)
 	main.camera.snap()
 	await _wait(0.8)
-	await _shot("07_lane_approach")
-	p.enter_lane(1, true)
+	await _shot("07_highway_approach")
+	# a wide view over the network from above an interchange
+	var hub: Dictionary = main.net.nodes[0]
+	var vp: Vector3 = hub["pos"] + Vector3(6000, 9000, 6000)
+	p.global_transform = Transform3D(Basis.looking_at((hub["pos"] - vp).normalized(), Vector3.UP), vp)
+	main.camera.snap()
+	await _wait(0.8)
+	await _shot("08_network_overview")
+	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"])
+	p.enter_lane(1, true, hwy)
+	p.lane_speed = 3500.0
 	GameInput.throttle = 1.0
-	await _wait(3.0)
-	await _shot("08_wide_lane")
+	await _wait(2.5)
+	await _shot("09_highway_ride")
+	# close to the interchange at the end: junction preview
+	p.lane_s = hwy.length - 9000.0
+	p.lane_offset = Vector2(hwy.radius * 0.5, 0)
+	await _wait(1.2)
+	await _shot("10_highway_junction")
+	p.exit_lane()
+	# a road, leaning into a turn
+	var sharp := 0.0
+	var sharp_s := road.length * 0.5
+	for i in int(road.length / 50.0):
+		if road.curvature(i * 50.0).z > sharp:
+			sharp = road.curvature(i * 50.0).z
+			sharp_s = i * 50.0
+	f = road.frame(maxf(sharp_s - 700.0, 0.0))
+	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"])
+	p.enter_lane(1, true, road)
+	p.lane_speed = 900.0
+	await _wait(1.0)
+	await _shot("11_road_turn")
 	main.toggle_autopilot()
-	await _wait(2.0)
-	await _shot("09_lane_autopilot")
+	await _wait(1.5)
+	await _shot("12_road_autopilot")
 	p.set_autopilot(false)
 	p.exit_lane()
+	# a road seen from outside, with a highway behind it
+	var rf: Dictionary = road.frame(road.length * 0.5)
+	var rv: Vector3 = rf["origin"] + rf["right"] * 900.0 + rf["up"] * 300.0 - rf["fwd"] * 600.0
+	p.global_transform = Transform3D(Basis.looking_at((rf["origin"] + rf["fwd"] * 1500.0 - rv).normalized(), Vector3.UP), rv)
+	main.camera.snap()
+	await _wait(0.8)
+	await _shot("13_road_outside")
 	# combat at the beacon with a missile in flight
 	var enemies := get_tree().get_nodes_in_group("enemies")
 	if enemies.size() > 0:
@@ -126,7 +168,7 @@ func _run() -> void:
 		p.target = e
 		p.fire_missile()
 		await _wait(0.7)
-		await _shot("10_combat_missile")
+		await _shot("14_combat_missile")
 		GameInput.set_auto_fire(false)
 	# salvage field
 	var loots := get_tree().get_nodes_in_group("loot")
@@ -135,17 +177,17 @@ func _run() -> void:
 		p.global_transform = Transform3D(Basis.looking_at(loots[0].global_position - lp, Vector3.UP), lp)
 		main.camera.snap()
 		await _wait(0.8)
-		await _shot("11_salvage_field")
+		await _shot("15_salvage_field")
 	# maps
 	main._open_map(false)
 	main.star_map._set_tab("system")
 	await _wait(0.6)
-	await _shot("12_map_system")
+	await _shot("16_map_system")
 	main.star_map._set_tab("galaxy")
 	main.star_map.selected = "vesper"
 	main.star_map._refresh()
 	await _wait(0.4)
-	await _shot("13_map_galaxy")
+	await _shot("17_map_galaxy")
 	main._close_overlay()
 	# stargate
 	var gate: Stargate = main.gates.values()[0]
@@ -153,7 +195,7 @@ func _run() -> void:
 	p.global_transform = Transform3D(Basis.looking_at(gate.global_position - ap, Vector3.UP), ap)
 	main.camera.snap()
 	await _wait(1.0)
-	await _shot("14_stargate")
+	await _shot("18_stargate")
 	# first person near a station
 	Settings.first_person = true
 	var st: Station = main.stations.values()[2]
@@ -161,7 +203,7 @@ func _run() -> void:
 	p.global_transform = Transform3D(Basis.looking_at(st.global_position - sp, Vector3.UP), sp)
 	main.camera.snap()
 	await _wait(1.0)
-	await _shot("15_first_person")
+	await _shot("19_first_person")
 	# fresh pilot in the starter Sparrow, 1st person, flying out from the station
 	GameState.reset_game()
 	main.restart_from_save(true)
@@ -169,29 +211,36 @@ func _run() -> void:
 	main._launch()
 	GameInput.throttle = 0.6
 	await _wait(2.5)
-	await _shot("16_fp_sparrow_fresh")
-	# lane from inside, 1st person
-	p.enter_lane(1, true)
+	await _shot("20_fp_sparrow_fresh")
+	# highway from inside, 1st person
+	var h2: SpaceLane = null
+	for t in main.net.tracks:
+		if t.kind == "highway" and h2 == null:
+			h2 = t
+	var hf: Dictionary = h2.frame(h2.length * 0.3)
+	p.global_transform = Transform3D(Basis.looking_at(hf["fwd"], Vector3.UP), hf["origin"])
+	p.enter_lane(1, true, h2)
+	p.lane_speed = 3200.0
 	GameInput.throttle = 1.0
 	await _wait(2.5)
-	await _shot("17_fp_lane")
+	await _shot("21_fp_highway")
 	Settings.first_person = false
 	await _wait(1.0)
-	await _shot("18_lane_3rd")
+	await _shot("22_highway_3rd")
 	p.exit_lane()
 	# settings, saves and dev menu
 	Settings.dev_mode = true
 	GameState.save_slot(1)
 	main._open_settings()
 	await _wait(0.5)
-	await _shot("19_settings")
+	await _shot("23_settings")
 	main.settings_panel.saves.open()
 	await _wait(0.5)
-	await _shot("20_saves")
+	await _shot("24_saves")
 	main.settings_panel.saves.visible = false
 	main.settings_panel.dev.open()
 	await _wait(0.5)
-	await _shot("21_dev_menu")
+	await _shot("25_dev_menu")
 	main.settings_panel.dev.visible = false
 	main._close_overlay()
 	Settings.dev_mode = false

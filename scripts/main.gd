@@ -6,7 +6,7 @@ var env: SpaceEnv
 var camera: ChaseCam
 var cockpit: Cockpit
 var player: PlayerShip
-var lane: SpaceLane
+var net: RoadNet
 var combat: Combat
 var stations := {}
 var gates := {}            # link system id -> Stargate
@@ -30,6 +30,12 @@ var _respawning := false
 var _jumping := false
 var _last_target: Node3D
 var _alarm_t := 0.0
+var _near_t := 0.0
+var near_road := {}       # closest road / highway point, refreshed 4x a second
+var near_highway := {}
+var _ap_plan := {}
+var _ap_plan_t := 0.0
+var _ap_plan_goal := Vector3.INF
 
 
 func _ready() -> void:
@@ -115,86 +121,144 @@ func load_system(id: String) -> void:
 	add_child(world_root)
 	env.apply_system(sysd["sky"])
 	_build_system(id, sysd)
-	player.lane = lane
+	player.net = net
+	player.lane = null
 	_ambient_timer = 0.0
 	_spawn_ambient_raiders()
 
 
 func _build_system(id: String, sysd: Dictionary) -> void:
-	## One long, gently winding lane (~50 km) from station A to station B, with the
-	## third station, the beacon and the stargates hanging off it a few km out.
+	## A graph-shaped system ~70 km across. Four interchanges on a ring plus a
+	## core interchange are joined by grand highways. Stations, stargates, the
+	## beacon and a few crossroads hang off them on plenty of small roads.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(id)
-	var yaw := rng.randf() * TAU
-	var ab := Vector3(cos(yaw), rng.randf_range(-0.05, 0.05), sin(yaw)).normalized()
+	var sky: Dictionary = sysd["sky"]
 	var up := Vector3.UP
-	var side := ab.cross(up).normalized()
-	_side = side
-	var L := rng.randf_range(46000.0, 52000.0)
-	var phase := rng.randf() * TAU
-	var amp := rng.randf_range(2000.0, 3500.0)
-	var lane_pt := func(f: float) -> Vector3:
-		var env := sin(f * PI)
-		return ab * (f * L) + side * (sin(f * TAU * 0.9 + phase) * amp * env) + up * (sin(f * TAU * 1.3 + phase * 2.0) * 400.0 * env)
-	var perp_at := func(f: float) -> Vector3:
-		var t: Vector3 = (lane_pt.call(minf(f + 0.002, 1.0)) - lane_pt.call(maxf(f - 0.002, 0.0))).normalized()
-		return t.cross(up).normalized()
+	var rot := rng.randf() * TAU
+	var R := rng.randf_range(30000.0, 35000.0)
+	var at := func(ang: float, r: float, y: float) -> Vector3:
+		return Vector3(cos(ang) * r, y, sin(ang) * r)
+	var gold := Color(1.0, 0.85, 0.45)
 
-	var pts := []
-	for i in 33:
-		pts.append(lane_pt.call(i / 32.0))
-	var start_dir: Vector3 = (pts[1] - pts[0]).normalized()
-	var end_dir: Vector3 = (pts[32] - pts[31]).normalized()
+	net = RoadNet.new()
+	net.name = "RoadNet"
+	world_root.add_child(net)
+	net.set_palette(sky)
 
+	# interchanges
+	var hubs := []
+	var hub_ang := []
+	for i in 4:
+		var a := rot + i * TAU / 4.0 + rng.randf_range(-0.22, 0.22)
+		hub_ang.append(a)
+		hubs.append(net.add_node(["Alpha", "Beta", "Gamma", "Delta"][i] + " Interchange", at.call(a, R * rng.randf_range(0.88, 1.06), rng.randf_range(-1600.0, 1600.0)), "hub", gold))
+	var core := net.add_node("Core Interchange", at.call(rng.randf() * TAU, R * rng.randf_range(0.05, 0.18), rng.randf_range(-700.0, 700.0)), "hub", gold)
+	var all_hubs := hubs + [core]
+
+	# points of interest: stations in three sectors, the beacon in the fourth,
+	# stargates out beyond the ring
 	var sdefs: Array = sysd["stations"]
 	var links: Array = sysd["links"]
-	var a_pos: Vector3 = pts[0] - start_dir * 2200.0 + up * rng.randf_range(-200, 200)
-	var b_pos: Vector3 = pts[32] + end_dir * 2200.0 + up * rng.randf_range(-200, 200)
-	var a := _make_station(sdefs[0], a_pos, start_dir, 0.0)
-	var b := _make_station(sdefs[1], b_pos, -end_dir, 0.6)
-
-	var exits := [{"name": a.display_name, "pos": pts[0], "color": a.accent}]
-	# third station
-	var c_f := 0.52
-	var c_exit: Vector3 = lane_pt.call(c_f)
-	var c_pos: Vector3 = c_exit - perp_at.call(c_f) * 2600.0 + up * 250.0
-	var c: Station = null
-	if sdefs.size() > 2:
-		c = _make_station(sdefs[2], c_pos, (c_exit - c_pos).normalized(), 1.2)
-		exits.append({"name": c.display_name, "pos": c_exit, "color": c.accent})
+	var pois := []   # {node, pos (of the thing), away}
+	var placed: Array = []
+	for nd in net.nodes:
+		placed.append(nd["pos"])
+	var free_spot := func(ang: float, r0: float, r1: float, y: float) -> Vector3:
+		var best := Vector3.ZERO
+		var best_d := -1.0
+		for k in 12:
+			var cand: Vector3 = at.call(ang + rng.randf_range(-0.3, 0.3), rng.randf_range(r0, r1), y)
+			var md := INF
+			for q in placed:
+				md = minf(md, (q as Vector3).distance_to(cand))
+			if md > best_d:
+				best_d = md
+				best = cand
+			if md > 12000.0:
+				break
+		placed.append(best)
+		return best
+	var station_nodes := []
+	for i in sdefs.size():
+		var a: float = rot + (i + 0.5) * TAU / 4.0
+		var tp: Vector3 = free_spot.call(a, R * 0.42, R * 0.7, rng.randf_range(-900.0, 900.0))
+		var outward := Vector3(tp.x, 0, tp.z).normalized()
+		var away := outward.rotated(up, PI * 0.5 * (1.0 if rng.randf() < 0.5 else -1.0)).lerp(outward, 0.3).normalized()
+		var spos := tp + away * 2000.0 + up * rng.randf_range(-200.0, 200.0)
+		var st := _make_station(sdefs[i], spos, (tp - spos).normalized(), i * 0.6)
+		var n := net.add_node(st.display_name, tp, "poi", st.accent)
+		station_nodes.append(n)
+		pois.append(n)
 	# beacon + asteroid field
-	var bf := 0.38
-	var b_exit: Vector3 = lane_pt.call(bf)
-	beacon_pos = b_exit + perp_at.call(bf) * 3000.0 - up * 300.0
-	exits.append({"name": "Beacon", "pos": b_exit, "color": Color(0.7, 0.5, 1.0)})
+	var ba: float = rot + 3.5 * TAU / 4.0
+	var bt: Vector3 = free_spot.call(ba, R * 0.45, R * 0.7, rng.randf_range(-600.0, 600.0))
+	var bout := Vector3(bt.x, 0, bt.z).normalized()
+	beacon_pos = bt + bout * 3000.0 - up * 300.0
+	_side = bout.cross(up).normalized()
+	var beacon_node := net.add_node("Beacon", bt, "poi", Color(0.7, 0.5, 1.0))
+	pois.append(beacon_node)
 	# stargates
-	var gfs := [0.18, 0.68, 0.86]
 	for i in links.size():
-		var gf: float = gfs[i]
-		var g_exit: Vector3 = lane_pt.call(gf)
-		var sgn := -1.0 if i != 1 else 1.0
-		var gp: Vector3 = g_exit + perp_at.call(gf) * 2600.0 * sgn + up * 150.0
+		var ga: float = hub_ang[i] + 0.4 + rng.randf_range(-0.1, 0.1)
+		var gt: Vector3 = free_spot.call(ga, R * 1.22, R * 1.32, rng.randf_range(-1200.0, 1200.0))
+		var gout := Vector3(gt.x, 0, gt.z).normalized()
+		var gp: Vector3 = gt + gout * 2600.0 + up * 150.0
 		var sg := Stargate.new()
 		sg.link = links[i]
 		sg.display_name = "Gate: " + Galaxy.SYSTEMS[links[i]]["name"]
 		sg.color = (Galaxy.SYSTEMS[links[i]]["sky"]["c"] as Color).lerp(Color(1, 0.9, 0.6), 0.4)
 		world_root.add_child(sg)
-		sg.global_transform = Transform3D(Basis.looking_at((g_exit - gp).normalized(), up), gp)
+		sg.global_transform = Transform3D(Basis.looking_at((gt - gp).normalized(), up), gp)
 		sg.build()
 		gates[links[i]] = sg
-		exits.append({"name": "Gate to " + Galaxy.SYSTEMS[links[i]]["name"], "pos": g_exit, "color": Color(1.0, 0.85, 0.4)})
-	exits.append({"name": b.display_name, "pos": pts[32], "color": b.accent})
+		pois.append(net.add_node("Gate to " + Galaxy.SYSTEMS[links[i]]["name"], gt, "poi", gold))
+	# crossroads
+	var crosses := []
+	for i in 4:
+		var cp: Vector3 = free_spot.call(rng.randf() * TAU, R * 0.3, R * 0.95, rng.randf_range(-1200.0, 1200.0))
+		crosses.append(net.add_node("Crossroads %s" % ["K", "M", "R", "V"][i], cp, "cross", Color(0.5, 0.85, 1.0)))
 
-	lane = SpaceLane.new()
-	world_root.add_child(lane)
-	lane.build(pts, exits)
-	lane.set_palette(Galaxy.SYSTEMS[GameState.system_id]["sky"])
+	# grand highways: the ring, plus three spokes through the core
+	for i in 4:
+		var a: int = hubs[i]
+		var b: int = hubs[(i + 1) % 4]
+		var mid: Vector3 = ((net.nodes[a]["pos"] as Vector3) + (net.nodes[b]["pos"] as Vector3)) * 0.5
+		var flat := Vector3(mid.x, 0, mid.z)
+		net.add_track(a, b, "highway", rng, flat.normalized() * maxf(0.0, R - flat.length()) * 0.85)
+	var skip := rng.randi() % 4
+	for i in 4:
+		if i != skip:
+			net.add_track(hubs[i], core, "highway", rng)
+
+	# small roads: everything to its nearest interchange and to its neighbours
+	var nearest := func(n: int, pool: Array, k: int) -> Array:
+		var p0: Vector3 = net.nodes[n]["pos"]
+		var cand := pool.filter(func(m): return m != n)
+		cand.sort_custom(func(x, y): return p0.distance_to(net.nodes[x]["pos"]) < p0.distance_to(net.nodes[y]["pos"]))
+		return cand.slice(0, k)
+	var road := func(a: int, b: int) -> void:
+		if a == b or net.has_edge(a, b):
+			return
+		if (net.nodes[a]["pos"] as Vector3).distance_to(net.nodes[b]["pos"]) > 42000.0:
+			return
+		net.add_track(a, b, "road", rng)
+	for n in pois:
+		for h in nearest.call(n, all_hubs, 1):
+			road.call(n, h)
+	for n in station_nodes + [beacon_node]:
+		for m in nearest.call(n, station_nodes + [beacon_node] + crosses, 1):
+			road.call(n, m)
+	for c in crosses:
+		for m in nearest.call(c, pois + crosses + all_hubs, 3):
+			road.call(c, m)
+	net.build_nodes(sky)
 
 	var bea := MeshInstance3D.new()
 	bea.mesh = Models.beacon(Color(0.7, 0.5, 1.0))
 	world_root.add_child(bea)
-	bea.global_position = beacon_pos - perp_at.call(bf) * 200.0
-	field_center = beacon_pos + perp_at.call(bf) * 2200.0
+	bea.global_position = beacon_pos - bout * 200.0
+	field_center = beacon_pos + bout * 2200.0
 	_build_asteroids(field_center, rng)
 	# salvage drifting in the field
 	for i in 16:
@@ -232,7 +296,7 @@ func _build_asteroids(center: Vector3, rng: RandomNumberGenerator) -> void:
 	var per := [[], [], [], []]
 	for i in 420:
 		var p := center + Vector3(rng.randfn() * 1300.0, rng.randfn() * 380.0, rng.randfn() * 1300.0)
-		if lane.curve.get_closest_point(p).distance_to(p) < SpaceLane.RADIUS + 250.0:
+		if not net.closest(p, 500.0).is_empty():
 			continue
 		var r := pow(rng.randf(), 3.0) * 80.0 + 5.0
 		rocks.append({"pos": p, "r": r * 0.9})
@@ -424,7 +488,12 @@ func _process(delta: float) -> void:
 		sfx.music("combat" if _combat_hold > 0.0 else "flight")
 	touch.visible = flying and not star_map.visible and not settings_panel.visible
 	hud.visible = not menu.visible and not star_map.visible and not settings_panel.visible
-	lane.lane_mat.set_shader_parameter("intensity", 0.7 if player.mode == PlayerShip.Mode.LANE else 1.0)
+	net.set_intensity(player.lane if player.mode == PlayerShip.Mode.LANE else null)
+	_near_t -= delta
+	if _near_t <= 0.0:
+		_near_t = 0.25
+		near_road = net.closest(player.global_position, INF, "road")
+		near_highway = net.closest(player.global_position, INF, "highway")
 
 	# target lock blip
 	if player.target != _last_target:
@@ -442,8 +511,8 @@ func _process(delta: float) -> void:
 	var col := Color(0.3, 0.9, 1.0)
 	var act := ""
 	if player.mode == PlayerShip.Mode.LANE:
-		var near := lane.nearest_entry(player.global_position)
-		if not near.is_empty() and near["dist"] < 600.0:
+		var near: Dictionary = player.lane.nearest_entry(player.global_position)
+		if not near.is_empty() and near["dist"] < 900.0:
 			label = "EXIT: " + near["name"]
 		else:
 			label = "DROP OUT"
@@ -461,7 +530,7 @@ func _process(delta: float) -> void:
 			act = "jump"
 			col = Color(1.0, 0.85, 0.4)
 		elif not player.can_enter_lane().is_empty():
-			label = "ENTER LANE"
+			label = "ENTER " + SpaceLane.KINDS[player.can_enter_lane()["track"].kind]["label"]
 			act = "lane"
 	touch.action_label = label
 	touch.autopilot_on = player.autopilot
@@ -581,30 +650,41 @@ func _autopilot_plan() -> void:
 		if t.has("beacon") and player.global_position.distance_to(beacon_pos) < 900.0:
 			player.set_autopilot(false, "Arrived at the beacon. Weapons free!")
 			return
-		# ride the lane when it's clearly faster
-		var cp := lane.closest(player.global_position)
-		var cg := lane.closest(goal)
-		var direct := player.global_position.distance_to(goal)
-		var top := player.top_speed()
-		var t_direct := direct / top
-		var t_lane: float = (cp["dist"] + cg["dist"]) / top + absf(cg["s"] - cp["s"]) / 1250.0
-		if direct > 5000.0 and absf(cg["s"] - cp["s"]) > 3000.0 and t_lane < t_direct * 0.75:
-			var dir := 1 if cg["s"] > cp["s"] else -1
-			if cp["dist"] < SpaceLane.RADIUS * 0.7:
-				player.enter_lane(dir, true)
-				player.ap_lane_exit_s = cg["s"]
+		# ride the network when it's faster: replan twice a second
+		_ap_plan_t -= get_physics_process_delta_time()
+		var pgoal: Vector3 = t["pos"]
+		if _ap_plan.is_empty() or _ap_plan_t <= 0.0 or _ap_plan_goal.distance_to(pgoal) > 50.0:
+			_ap_plan = net.plan(player.global_position, pgoal, player.top_speed())
+			_ap_plan_t = 0.5
+			_ap_plan_goal = pgoal
+		var rides: Array = _ap_plan["rides"]
+		if not rides.is_empty():
+			var r0: Dictionary = rides[0]
+			var tr: SpaceLane = r0["track"]
+			var c := tr.closest(player.global_position)
+			if c["dist"] < tr.radius * 0.7:
+				player.enter_lane(r0["dir"], true, tr)
+				player.ap_route = rides
+				_ap_plan_t = 1.0
 				sfx.play("lane_merge", -4.0)
 				return
-			var s_aim := clampf(cp["s"] + dir * minf(cp["dist"] * 0.6, 1500.0), 0.0, lane.length)
-			goal = lane.curve.sample_baked(s_aim, true)
+			var s_aim := clampf(c["s"] + r0["dir"] * minf(c["dist"] * 0.6, 1500.0), 0.0, tr.length)
+			goal = tr.curve.sample_baked(s_aim, true)
 			slow = false
 	else:
-		if player.ap_lane_exit_s < 0.0:
-			var cg2 := lane.closest(goal)
-			if (cg2["s"] - player.lane_s) * player.lane_dir > 1500.0:
-				player.ap_lane_exit_s = cg2["s"]
-			else:
+		_ap_plan_t -= get_physics_process_delta_time()
+		if _ap_plan_t <= 0.0 or player.ap_route.is_empty() or player.ap_route[0]["track"] != player.lane:
+			_ap_plan_t = 1.0
+			var top := player.top_speed()
+			var pg: Vector3 = t["pos"]
+			var on := net.plan(player.global_position, pg, top, player.lane, player.lane_s, player.lane_dir)
+			var off := net.plan(player.global_position, pg, top)
+			if off["cost"] + 4.0 < on["cost"]:
 				player.exit_lane()
+				_ap_plan = off
+				_ap_plan_t = 0.5
+				return
+			player.ap_route = on["rides"]
 	player.ap_goal = goal
 	player.ap_arrive_slow = slow
 

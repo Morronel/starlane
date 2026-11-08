@@ -52,7 +52,8 @@ func _physics_process(delta: float) -> void:
 	var k := 7.0 if not in_lane else 5.0
 	smooth_basis = smooth_basis.slerp(t.basis.orthonormalized(), 1.0 - exp(-delta * k)).orthonormalized()
 	var pull := clampf(target.speed / target.top_speed(), 0.0, 3.0)
-	var offset := (Vector3(0, 3.4, 13.5 + pull * 1.5) if not in_lane else Vector3(0, 4.6, 19.0)) * target.cam_scale
+	var hw: bool = in_lane and target.lane != null and target.lane.kind == "highway"
+	var offset := (Vector3(0, 3.4, 13.5 + pull * 1.5) if not in_lane else (Vector3(0, 5.2, 23.0) if hw else Vector3(0, 4.4, 18.0))) * target.cam_scale
 	global_position = t.origin + smooth_basis * offset
 	var look_at_pt2 := t.origin + smooth_basis * Vector3(0, 1.2, 0) + t.basis * Vector3(0, 0, -40.0)
 	global_basis = Transform3D().looking_at(look_at_pt2 - global_position, smooth_basis.y).basis
@@ -62,7 +63,9 @@ func _physics_process(delta: float) -> void:
 
 func _fov_and_shake(delta: float, in_lane: bool) -> void:
 	var spd_ratio := clampf(target.speed / target.top_speed(), 0.0, 6.0)
-	var want_fov := 68.0 + minf(spd_ratio, 2.2) * 6.0 + (10.0 if in_lane else 0.0) + warp * 55.0
+	# each tier of speed widens the view a bit more: flight, road, highway
+	var tier := clampf((target.speed - 1000.0) / 3500.0, 0.0, 1.0) * 12.0 if in_lane else 0.0
+	var want_fov := 68.0 + minf(spd_ratio, 2.2) * 6.0 + (8.0 if in_lane else 0.0) + tier + warp * 55.0
 	fov = lerpf(fov, want_fov, 1.0 - exp(-delta * 2.5))
 
 	# in the cockpit the cabin sits half a metre away, so shake must stay tiny
