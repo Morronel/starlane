@@ -1,13 +1,14 @@
 # Starlane
 
 An original arcade space sim prototype for Android, built with Godot 4.3.
-The loop is short: dock, trade or take a contract, ride the space lane, fight raiders, upgrade.
+The loop is short: dock, trade or take a contract, ride the roads and highways, fight raiders, upgrade.
 
 ## What's in the prototype
 
-- **Six star systems with eighteen stations.** Each system is a ~50 km stretch of space around one long, winding space lane, with three stations, a beacon, a salvage field and two or three stargates. Every system has its own sky, sun, planet and threat level.
-- **Space lanes** are wide (600 m), softly glowing tubes tinted in the colours of the system you're in, with slow, calm light swells instead of flashing stripes. You can join them anywhere. Fly into one roughly along it and you merge automatically, or tap ENTER LANE when you are close. You ride at up to 1600 m/s (2300 with boost), dodge freighter traffic and drop out wherever you like.
-- **Destinations and autopilot.** Pick a station or a contract on the star map (or TRACK a contract at a station) and a marker shows where to go. AUTOPILOT flies there for you: it heads for the lane, rides it a bit slower than flat out, drops out, docks, and even jumps through stargates. Boost works without breaking it. Any stick input takes back control.
+- **Six star systems with eighteen stations.** Each system is a graph about 70 km across. Four interchanges on a ring plus a core interchange are linked by grand highways. Stations, stargates, the beacon and four crossroads hang off them on about twenty small roads, so there are always several ways to get somewhere. Every system has its own sky, sun, planet and threat level.
+- **Three ways to move.** Free flight is steer, throttle and boost (about 120 to 300 m/s). **Roads** are slim, cool-tinted tubes dotted with small light studs. They wind a lot and carry you at up to 900 m/s (1280 with boost). **Grand highways** are wide, warm-white tubes with a double core and big pylon rings every 5 km. They take a few seconds to wind up to 4000 m/s (5600 with boost) and cross the whole system in under a minute. Both stay calm (no flashing stripes) and are tinted from the current system's sky.
+- **Turns and junctions.** In a bend the tube pushes you toward the outside wall. Easy bends ride themselves, but in sharp ones at full speed you have to hold the inside line, and boosting through them gets you thrown off. The TURN PUSH gauge shows where you are in the tube and how hard the bend pushes. Every track ends at a junction. Lean toward a branch inside the tube to take it, stay centred to carry straight on (highways prefer highways), or stay centred at a station, gate or the beacon to stop there. The HUD previews the junction and lights up the branch you'll take. You can merge onto any road or highway anywhere: fly into it along it, or tap ENTER ROAD / ENTER HIGHWAY when close.
+- **Destinations and autopilot.** Pick a station or a contract on the star map (or TRACK a contract at a station) and a marker shows where to go. AUTOPILOT plans the fastest route across the whole network (free flight, roads and highways), picks the branches at every junction, eases off for sharp bends, drops out, docks, and even jumps through stargates. It rides a bit slower than a pilot flying flat out. Boost works without breaking it. Any stick input takes back control.
 - **Stargates** with limited fast travel. Each hop costs a jump charge. Refill at stations and carry more with Jump Capacitors.
 - **Hangar:** six ships, from the Sparrow interceptor to the Mule hauler and the Seraph. Trade in your current ship (60% back). Gear moves over where it fits.
 - **Outfit:** primary weapons (pulse lasers, ion repeater, scatter blaster, plasma lance, rail driver), secondary launchers with homing missiles and torpedoes, and utility gear (shields, armor, engines, cargo pods, tractor beam, nano-repair, afterburner, targeting computer, jump capacitors). Each ship has its own slot layout, and every station stocks different gear.
@@ -27,7 +28,7 @@ The loop is short: dock, trade or take a contract, ride the space lane, fight ra
 | Throttle | Slider on the right | Right stick Y, LB / RB | R F |
 | Fire | FIRE | A or RT | Space, right mouse |
 | Boost | BOOST | B or LT | Shift |
-| Lane / dock / exit / jump | Context button | Y | T or Enter |
+| Merge / drop out / dock / jump | Context button | Y | T or Enter |
 | Missiles | MSL | Right stick click | C or X |
 | Auto-attack | Double-tap FIRE | X | G |
 | Autopilot | AUTOPILOT button | Start | P |
@@ -53,6 +54,6 @@ For release signing, set `GODOT_ANDROID_KEYSTORE_RELEASE_PATH`, `_USER` and `_PA
 
 ## Dev tools
 
-- `godot --headless -- --simtest` runs a scripted gameplay check. It covers autopilot via the lane to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, the cockpit view, save slots, an automatic lane merge, death and respawn, and save/load.
+- `godot --headless -- --simtest` runs a scripted gameplay check. It checks the network (every node reachable, turn tuning), then covers autopilot across the roads to a raider nest, auto-attack and missile kills, salvage pickup, autopilot docking, crafting and installing gear, touch scrolling (a drag must not buy, a tap must), autopilot across a stargate, a ship trade-in, the cockpit view, save slots, an automatic road merge, riding a highway through an interchange, being thrown off when boosting blind through a sharp bend, death and respawn, and save/load.
 - `godot -- --autotest=/some/dir` saves a set of screenshots from a scripted flight.
 - `godot -- --cockpits=/some/dir` saves one cockpit screenshot per ship (set `COCKPITS=mule,seraph` to pick hulls).

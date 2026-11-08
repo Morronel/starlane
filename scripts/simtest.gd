@@ -32,12 +32,20 @@ func _wait_until(cond: Callable, timeout: float) -> bool:
 
 
 var _used_lane := false
+var _kinds := {}
+
+
+var _dbg_t := 0
 
 
 func _beacon_leg() -> bool:
 	var p: PlayerShip = main.player
+	_dbg_t += 1
+	if _dbg_t % 20 == 0:
+		print("  ap: mode %d %s s=%d spd=%d beacon %d m, route %d, plan %s" % [p.mode, p.lane.kind if p.lane else "-", p.lane_s, p.speed, p.global_position.distance_to(main.beacon_pos), p.ap_route.size(), str(main._ap_plan.get("rides", []).size())])
 	if p.mode == PlayerShip.Mode.LANE:
 		_used_lane = true
+		_kinds[p.lane.kind] = true
 		GameInput.touch_boost = true
 	else:
 		GameInput.touch_boost = false
@@ -125,7 +133,29 @@ func _run() -> void:
 	GameState.accept(hunt)
 	if GameState.destination_info().get("beacon", false) != true:
 		return _fail("accepting a hunt did not track it")
-	print("lane length ", int(main.lane.length), " m, stations ", main.stations.keys(), " gates ", main.gates.keys())
+	var net: RoadNet = main.net
+	var km := {"road": 0.0, "highway": 0.0}
+	var cnt := {"road": 0, "highway": 0}
+	var kmax := {"road": 0.0, "highway": 0.0}
+	for t in net.tracks:
+		km[t.kind] += t.length / 1000.0
+		cnt[t.kind] += 1
+		for i in int(t.length / 50.0):
+			kmax[t.kind] = maxf(kmax[t.kind], t.curvature(i * 50.0).z)
+	print("network: %d nodes, %d highways (%d km), %d roads (%d km); sharpest turn radius road %d m, highway %d m" % [net.nodes.size(), cnt["highway"], km["highway"], cnt["road"], km["road"], 1.0 / kmax["road"], 1.0 / kmax["highway"]])
+	print("stations ", main.stations.keys(), " gates ", main.gates.keys())
+	for k in ["road", "highway"]:
+		var sp: Dictionary = SpaceLane.KINDS[k]
+		var t0: SpaceLane = null
+		for t in net.tracks:
+			if t.kind == k:
+				t0 = t
+		print("  %s: autopilot safe speed in its sharpest turn %d m/s; push at full speed %d m/s, boosting %d m/s vs steering %d m/s" % [k, t0.safe_speed(kmax[k]), sp["speed"] * sp["speed"] * kmax[k] / sp["grip"], pow(sp["speed"] + sp["boost"], 2) * kmax[k] / sp["grip"], sp["steer"]])
+	# every node reachable from every other through the network
+	for n in net.nodes:
+		var pl := net.plan(net.nodes[0]["pos"] + Vector3(0, 5, 0), n["pos"], 120.0)
+		if n["id"] != 0 and pl["rides"].is_empty() and (net.nodes[0]["pos"] as Vector3).distance_to(n["pos"]) > 10000.0:
+			return _fail("no route to " + n["name"])
 
 	# --- autopilot to the raider nest (uses the lane), boosting part of the way
 	main._launch()
@@ -138,9 +168,9 @@ func _run() -> void:
 	GameInput.touch_boost = false
 	if not ok:
 		return _fail("autopilot never reached the beacon (at %s, %d m away)" % [str(p.global_position), int(p.global_position.distance_to(main.beacon_pos))])
-	print("autopilot arrived ", int(p.global_position.distance_to(main.beacon_pos)), " m from beacon, used lane: ", _used_lane)
+	print("autopilot arrived ", int(p.global_position.distance_to(main.beacon_pos)), " m from beacon, rode: ", _kinds.keys())
 	if not _used_lane:
-		return _fail("autopilot did not use the lane")
+		return _fail("autopilot did not use the network")
 	Engine.time_scale = 1.0
 
 	# --- fight: auto-attack with heavy guns, plus a missile volley
@@ -257,19 +287,57 @@ func _run() -> void:
 	if main.cockpit.visible:
 		return _fail("cockpit still visible in 3rd person")
 	print("cockpit ok: ", main.cockpit._built)
-	var c: Dictionary = main.lane.closest(p.global_position)
-	var s_mid: float = main.lane.length * 0.3
-	var f: Dictionary = main.lane.frame(s_mid)
-	var start: Vector3 = f["origin"] + f["right"] * (SpaceLane.RADIUS + 120.0)
+	var road: SpaceLane = null
+	var hwy: SpaceLane = null
+	for t in main.net.tracks:
+		if t.kind == "road" and road == null and t.length > 8000.0:
+			road = t
+		if t.kind == "highway" and hwy == null:
+			hwy = t
+	var s_mid: float = road.length * 0.3
+	var f: Dictionary = road.frame(s_mid)
+	var start: Vector3 = f["origin"] + f["right"] * (road.radius + 120.0)
 	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 700.0 - start).normalized(), Vector3.UP), start)
 	p._lane_was_inside = false
 	p._merge_cd = 0.0
 	GameInput.throttle = 1.0
 	ok = await _wait_until(func(): return p.mode == PlayerShip.Mode.LANE, 12.0)
 	if not ok:
-		return _fail("did not auto-merge into the lane (dist %d)" % int(main.lane.closest(p.global_position)["dist"]))
-	print("auto-merged into lane, dir ", p.lane_dir)
+		return _fail("did not auto-merge into the road (dist %d)" % int(road.closest(p.global_position)["dist"]))
+	print("auto-merged onto a ", p.lane.kind, ", dir ", p.lane_dir)
 	p.exit_lane()
+
+	# --- highway: ride to the interchange at the end and carry on through it
+	f = hwy.frame(hwy.length - 9000.0)
+	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"])
+	p.enter_lane(1, true, hwy)
+	p.lane_speed = 3000.0
+	GameInput.throttle = 0.6
+	ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane != hwy, 20.0)
+	if not ok or p.mode != PlayerShip.Mode.LANE:
+		return _fail("highway did not carry on through the interchange (mode %d)" % p.mode)
+	print("through ", main.net.node_name(hwy.node_b), " onto a ", p.lane.kind, " to ", main.net.node_name(main.net.end_node(p.lane, p.lane_dir)), " at ", int(p.lane_speed), " m/s")
+	p.exit_lane()
+
+	# --- turns: boosting through the sharpest bend with no steering throws you off
+	var sharp := 0.0
+	var sharp_s := 0.0
+	for i in int(road.length / 50.0):
+		var k: float = road.curvature(i * 50.0).z
+		if k > sharp:
+			sharp = k
+			sharp_s = i * 50.0
+	f = road.frame(maxf(sharp_s - 1500.0, 0.0))
+	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"])
+	p.enter_lane(1, true, road)
+	p.lane_offset = Vector2.ZERO
+	p.lane_speed = 1250.0
+	GameInput.touch_boost = true
+	ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane != road or p.lane_s > sharp_s + 1500.0, 12.0)
+	GameInput.touch_boost = false
+	print("boosting blind through a %d m bend: %s" % [int(1.0 / sharp), "thrown off" if p.mode == PlayerShip.Mode.FLIGHT else "held on"])
+	if p.mode == PlayerShip.Mode.LANE:
+		p.exit_lane()
 
 	# --- death and respawn
 	GameState.hull = 1.0

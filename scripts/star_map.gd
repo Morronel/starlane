@@ -237,7 +237,7 @@ func _refresh() -> void:
 		var sysd: Dictionary = Galaxy.SYSTEMS[cur]
 		t += "[b]%s[/b]\n" % sysd["name"].to_upper()
 		t += "[color=#9fb4cc]%s[/color]\n\n" % sysd["desc"]
-		t += "[color=#7fe0ff]—[/color] Space lane (merge anywhere)\n[color=#b48cff]o[/color] Lane exits\n[color=#ffd36b]O[/color] Stargates\n[color=#ff6655]•[/color] Raiders\n[color=#ffd36b]*[/color] Destination\n"
+		t += "[color=#ffd98c]==[/color] Grand highway (very fast)\n[color=#7fe0ff]—[/color] Road (fast, merge anywhere)\n[color=#ffd98c][ ][/color] Interchange  [color=#9fe6ff]•[/color] Crossroads\n[color=#ffd36b]O[/color] Stargates\n[color=#ff6655]•[/color] Raiders\n[color=#ffd36b]*[/color] Destination\n"
 		var notes := _mission_notes(cur)
 		if notes != "":
 			t += "\n[b]CONTRACTS HERE[/b]\n" + notes
@@ -358,9 +358,9 @@ func _sys_fit() -> void:
 		pts.append(st.global_position)
 	for g in get_tree().get_nodes_in_group("stargates"):
 		pts.append(g.global_position)
-	if world.lane:
-		for e in world.lane.exits:
-			pts.append(world.lane.curve.sample_baked(e["s"], true))
+	if world.net:
+		for nd in world.net.nodes:
+			pts.append(nd["pos"])
 	pts.append(world.player.global_position)
 	var mn := Vector2(INF, INF)
 	var mx := Vector2(-INF, -INF)
@@ -384,34 +384,50 @@ func _draw_system() -> void:
 	var to2d := _sys_to2d
 
 	# scale bar
-	var km := 5000.0 * sc
+	var km := 10000.0 * sc
 	draw_line(r.position + Vector2(10, r.size.y - 10), r.position + Vector2(10 + km, r.size.y - 10), Color(1, 1, 1, 0.5), 2.0)
-	draw_string(UiKit.body(500), r.position + Vector2(10, r.size.y - 18), "5 km", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 1, 1, 0.6))
+	draw_string(UiKit.body(500), r.position + Vector2(10, r.size.y - 18), "10 km", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 1, 1, 0.6))
 
 	# asteroid field
 	if world.field_center != Vector3.ZERO:
 		var fc: Vector2 = to2d.call(world.field_center)
 		draw_circle(fc, 1500.0 * sc, Color(0.6, 0.5, 0.4, 0.1))
 		UiKit.text_c(self, UiKit.body(500), fc + Vector2(0, maxf(1500.0 * sc, 12.0) + 12.0), "Salvage field", 13, Color(0.8, 0.7, 0.6, 0.75), false)
-	# lane
-	if world.lane:
-		var lane: SpaceLane = world.lane
-		var prev: Vector2 = to2d.call(lane.curve.sample_baked(0.0, true))
-		var s := 0.0
-		while s < lane.length:
-			s = minf(s + 400.0, lane.length)
-			var p2: Vector2 = to2d.call(lane.curve.sample_baked(s, true))
-			draw_line(prev, p2, Color(0.3, 0.85, 1.0, 0.25), 9.0, true)
-			draw_line(prev, p2, Color(0.5, 0.95, 1.0, 0.9), 2.5, true)
-			prev = p2
-		# flowing dot
-		var fp: Vector2 = to2d.call(lane.curve.sample_baked(fmod(_t * 6000.0, lane.length), true))
-		draw_circle(fp, 4, Color(0.8, 1.0, 1.0))
-		for e in lane.exits:
-			var ep: Vector2 = to2d.call(lane.curve.sample_baked(e["s"], true))
-			draw_arc(ep, 9, 0, TAU, 20, Color(0.75, 0.6, 1.0), 2.5, true)
-			if e["name"] == "Beacon":
-				UiKit.text_c(self, UiKit.body(600), ep + Vector2(0, -20), "Beacon", 14, Color(0.8, 0.75, 1.0, 0.9))
+	# roads first, highways on top
+	if world.net:
+		var net: RoadNet = world.net
+		for pass_kind in ["road", "highway"]:
+			var hw: bool = pass_kind == "highway"
+			for t in net.tracks:
+				if t.kind != pass_kind:
+					continue
+				var step := 900.0 if hw else 500.0
+				var prev: Vector2 = to2d.call(t.curve.sample_baked(0.0, true))
+				var s := 0.0
+				while s < t.length:
+					s = minf(s + step, t.length)
+					var p2: Vector2 = to2d.call(t.curve.sample_baked(s, true))
+					if hw:
+						draw_line(prev, p2, Color(1.0, 0.75, 0.35, 0.22), 12.0, true)
+						draw_line(prev, p2, Color(1.0, 0.86, 0.55, 0.95), 4.0, true)
+					else:
+						draw_line(prev, p2, Color(0.45, 0.85, 1.0, 0.75), 1.8, true)
+					prev = p2
+				# flowing dot
+				var fp: Vector2 = to2d.call(t.curve.sample_baked(fmod(_t * (9000.0 if hw else 2500.0), t.length), true))
+				draw_circle(fp, 3.5 if hw else 2.2, Color(1.0, 0.95, 0.8) if hw else Color(0.8, 1.0, 1.0))
+		for nd in net.nodes:
+			var np: Vector2 = to2d.call(nd["pos"])
+			match nd["kind"]:
+				"hub":
+					draw_rect(Rect2(np - Vector2(8, 8), Vector2(16, 16)), Color(1.0, 0.86, 0.5), false, 2.5)
+					UiKit.text_c(self, UiKit.body(600), np + Vector2(0, -20), nd["name"].replace(" Interchange", ""), 13, Color(1.0, 0.86, 0.55, 0.85))
+				"cross":
+					draw_circle(np, 4.5, Color(0.6, 0.9, 1.0))
+				_:
+					draw_arc(np, 7, 0, TAU, 18, Color(0.75, 0.6, 1.0), 2.0, true)
+					if nd["name"] == "Beacon":
+						UiKit.text_c(self, UiKit.body(600), np + Vector2(0, -20), "Beacon", 14, Color(0.8, 0.75, 1.0, 0.9))
 	# stargates
 	for g in get_tree().get_nodes_in_group("stargates"):
 		var gp: Vector2 = to2d.call(g.global_position)
