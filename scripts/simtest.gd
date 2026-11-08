@@ -339,6 +339,42 @@ func _run() -> void:
 	if p.mode == PlayerShip.Mode.LANE:
 		p.exit_lane()
 
+	# --- boost tail: drain the meter while holding boost; speed must settle
+	# smoothly instead of flickering between boost and no boost
+	p.boost_energy = 0.08
+	p.boost_drained = false
+	GameInput.throttle = 1.0
+	GameInput.touch_boost = true
+	var last := p.speed
+	var flips := 0
+	var last_sign := 0
+	for i in 240:
+		await get_tree().physics_frame
+		var d := p.speed - last
+		last = p.speed
+		var sg := 0 if absf(d) < 0.05 else (1 if d > 0.0 else -1)
+		if sg != 0:
+			if last_sign != 0 and sg != last_sign:
+				flips += 1
+			last_sign = sg
+	GameInput.touch_boost = false
+	print("boost tail: drained ", p.boost_drained, ", speed ", int(p.speed), " (top ", int(p.top_speed()), "), direction flips ", flips)
+	if not p.boost_drained or flips > 2 or p.speed < p.top_speed() * 1.05:
+		return _fail("boost tail not smooth (flips %d, speed %d)" % [flips, int(p.speed)])
+
+	# --- main menu: opens docked, CONTINUE returns to the station screen
+	main.show_title()
+	await _wait(0.5)
+	if not main.title.visible or main.menu.visible or p.mode != PlayerShip.Mode.DOCKED:
+		return _fail("main menu did not open over the docked station")
+	main.title._on_continue()
+	await _wait(0.3)
+	if main.title.visible or not main.menu.visible:
+		return _fail("CONTINUE did not return to the station")
+	print("main menu ok")
+	main._launch()
+	await _wait(1.0)
+
 	# --- death and respawn
 	GameState.hull = 1.0
 	p.shield = 0.0

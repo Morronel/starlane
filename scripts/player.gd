@@ -137,9 +137,11 @@ func _flight(delta: float) -> void:
 ## Speed control shared by manual flight and autopilot (boost always allowed).
 func _drive(delta: float, target_speed: float) -> void:
 	var boosting := _boosting(delta)
-	if boosting:
-		target_speed = top_speed() * 2.1
-	speed = lerpf(speed, target_speed, 1.0 - exp(-delta * (2.2 if boosting else 1.4)))
+	if boost_level > 0.001:
+		target_speed = maxf(target_speed, top_speed() * (1.0 + 1.1 * boost_level))
+	speed = lerpf(speed, target_speed, 1.0 - exp(-delta * lerpf(1.4, 2.2, boost_level)))
+	if not boosting and absf(speed - target_speed) < 0.5:
+		speed = target_speed
 	var fwd := -global_transform.basis.z
 	# arcade drift: velocity chases the nose
 	velocity = velocity.lerp(fwd * speed, 1.0 - exp(-delta * 3.0))
@@ -154,13 +156,32 @@ func _drive(delta: float, target_speed: float) -> void:
 	world.asteroid_push(self)
 
 
+## Boost with a smooth tail: full boost while the meter lasts, then a steady
+## "drained" boost for as long as the button stays held (no regen meanwhile).
+## The meter has to refill to 25% before full boost comes back, and the
+## effective strength is eased, so speed never flickers at the empty mark.
 func _boosting(delta: float) -> bool:
-	var b: bool = GameInput.boost and boost_energy > 0.02
-	if b:
-		boost_energy = maxf(0.0, boost_energy - delta * 0.25 / GameState.boost_mult())
+	var held: bool = GameInput.boost
+	var want := 0.0
+	if held:
+		if boost_drained:
+			want = DRAINED_BOOST
+		else:
+			want = 1.0
+			boost_energy = maxf(0.0, boost_energy - delta * 0.25 / GameState.boost_mult())
+			if boost_energy <= 0.0:
+				boost_drained = true
 	else:
 		boost_energy = minf(1.0, boost_energy + delta * 0.12)
-	return b
+		if boost_energy >= 0.25:
+			boost_drained = false
+	boost_level = move_toward(boost_level, want, delta * (1.6 if want < boost_level else 2.5))
+	return held
+
+
+const DRAINED_BOOST := 0.3      # share of the full boost you keep on an empty meter
+var boost_level := 0.0           # eased 0..1 boost strength actually applied
+var boost_drained := false
 
 
 func _regen(delta: float) -> void:

@@ -58,6 +58,10 @@ func _run() -> void:
 		await _cockpits()
 		get_tree().quit()
 		return
+	main.show_title()
+	await _wait(1.2)
+	await _shot("00_main_menu")
+	main._enter_game(false)
 	GameState.reset_game()
 	GameState.credits = 60000
 	GameState.parts = {"scrap": 9, "circuit": 3, "coil": 1, "crystal": 2}

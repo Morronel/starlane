@@ -21,6 +21,7 @@ var touch: TouchControls
 var menu: StationMenu
 var star_map: StarMap
 var settings_panel: SettingsPanel
+var title: TitleMenu
 var fade: ColorRect
 var sfx: Sfx
 
@@ -73,6 +74,12 @@ func _ready() -> void:
 	GameState.mission_completed.connect(func(): sfx.play("mission_complete", -2.0))
 
 	restart_from_save(true)
+	var dev_run := false
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--autotest=") or arg.begins_with("--cockpits=") or arg == "--simtest":
+			dev_run = true
+	if not dev_run:
+		show_title()
 
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--autotest=") or arg.begins_with("--cockpits="):
@@ -87,8 +94,28 @@ func _ready() -> void:
 			add_child(s)
 
 
+## Main menu over the orbiting station view (the game behind it is docked).
+func show_title() -> void:
+	if player.mode != PlayerShip.Mode.DOCKED:
+		if player.mode != PlayerShip.Mode.DEAD:
+			GameState.save_game()
+		restart_from_save()
+	menu.visible = false
+	touch.reset()
+	title.open()
+
+
+func _enter_game(reload: bool, first := false) -> void:
+	title.visible = false
+	if reload:
+		restart_from_save(first)
+	else:
+		_show_menu(player.dock_station, [])
+
+
 ## (Re)start docked at the saved station.
 func restart_from_save(first := false) -> void:
+	title.visible = false
 	load_system(GameState.system_id)
 	player.refresh_ship()
 	player.autopilot = false
@@ -413,6 +440,17 @@ func _build_ui() -> void:
 	star_map.autopilot_requested.connect(func():
 		_close_overlay()
 		toggle_autopilot())
+	title = TitleMenu.new()
+	title.world = self
+	title.visible = false
+	layer.add_child(title)
+	title.continue_pressed.connect(func(): _enter_game(false))
+	title.loaded.connect(func(): _enter_game(true))
+	title.new_game_pressed.connect(func():
+		GameState.reset_game()
+		GameState.save_game()
+		_enter_game(true, true))
+	title.settings_pressed.connect(_open_settings)
 	settings_panel = SettingsPanel.new()
 	settings_panel.world = self
 	settings_panel.visible = false
@@ -487,7 +525,7 @@ func _process(delta: float) -> void:
 	else:
 		sfx.music("combat" if _combat_hold > 0.0 else "flight")
 	touch.visible = flying and not star_map.visible and not settings_panel.visible
-	hud.visible = not menu.visible and not star_map.visible and not settings_panel.visible
+	hud.visible = not menu.visible and not star_map.visible and not settings_panel.visible and not title.visible
 	net.set_intensity(player.lane if player.mode == PlayerShip.Mode.LANE else null)
 	_near_t -= delta
 	if _near_t <= 0.0:
