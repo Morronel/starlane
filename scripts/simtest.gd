@@ -52,6 +52,15 @@ func _beacon_leg() -> bool:
 	return not p.autopilot
 
 
+func _lumen_leg() -> bool:
+	var p: PlayerShip = main.player
+	_dbg_t += 1
+	if _dbg_t % 20 == 0:
+		var g: Stargate = main.gates.get("corvan")
+		print("  ap2: mode %d ap %s %s s=%d spd=%d gate %d m, route %d, sys %s" % [p.mode, p.autopilot, p.lane.kind if p.lane else "-", p.lane_s, p.speed, p.global_position.distance_to(g.global_position) if g else -1, p.ap_route.size(), GameState.system_id])
+	return p.mode == PlayerShip.Mode.DOCKED and GameState.system_id == "corvan"
+
+
 func _touch(pos: Vector2, pressed: bool) -> void:
 	var e := InputEventScreenTouch.new()
 	e.index = 0
@@ -258,7 +267,7 @@ func _run() -> void:
 	await _wait(1.0)
 	Engine.time_scale = 4.0
 	main.toggle_autopilot()
-	ok = await _wait_until(func(): return p.mode == PlayerShip.Mode.DOCKED and GameState.system_id == "corvan", 400.0)
+	ok = await _wait_until(func(): return _lumen_leg(), 400.0)
 	Engine.time_scale = 1.0
 	if not ok:
 		return _fail("autopilot did not reach Lumen: system %s mode %d" % [GameState.system_id, p.mode])
@@ -318,6 +327,84 @@ func _run() -> void:
 		return _fail("highway did not carry on through the interchange (mode %d)" % p.mode)
 	print("through ", main.net.node_name(hwy.node_b), " onto a ", p.lane.kind, " to ", main.net.node_name(main.net.end_node(p.lane, p.lane_dir)), " at ", int(p.lane_speed), " m/s")
 	p.exit_lane()
+
+	# --- junctions: no turn sharper than 60 degrees, and the lane you hold
+	# picks the branch
+	var worst := 0.0
+	var dead := 0
+	var multi := []
+	for t in main.net.tracks:
+		for d in [1, -1]:
+			var opts: Array = p.junction_options(t, d)
+			for o in opts:
+				if not o.get("stop", false):
+					worst = maxf(worst, absf(o["turn"]))
+			if opts.is_empty():
+				dead += 1
+			var real := opts.filter(func(o): return not o.get("stop", false))
+			if real.size() >= 2:
+				multi.append([t, d])
+	print("junction turns: sharpest %d deg, %d dead ends, %d forks" % [int(worst), dead, multi.size()])
+	if worst > 64.0:
+		return _fail("a junction turn is %d degrees" % int(worst))
+	if multi.is_empty():
+		return _fail("no junction offers a choice")
+	var fork: Array = multi[0]
+	var ft: SpaceLane = fork[0]
+	var fd: int = fork[1]
+	for side in [0, 1]:
+		var opts: Array = p.junction_options(ft, fd)
+		var want: int = 0 if side == 0 else opts.size() - 1
+		if opts[want].get("stop", false):
+			want -= 1
+		var s0: float = ft.length - 2500.0 if fd > 0 else 2500.0
+		f = ft.frame(s0)
+		p.global_transform = Transform3D(Basis.looking_at(f["fwd"] * fd, Vector3.UP), f["origin"])
+		p.enter_lane(fd, true, ft)
+		p.lane = ft
+		p.lane_dir = fd
+		p.lane_s = s0
+		p.lane_speed = 600.0
+		GameInput.throttle = 0.0
+		p.lane_offset = Vector2(p.band_centre(want, opts.size()) * fd, 0.0)
+		ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane != ft, 15.0)
+		var got: bool = p.mode == PlayerShip.Mode.LANE and p.lane == opts[want]["track"]
+		print("lane %d of %d at %s (turn %d deg): %s" % [want + 1, opts.size(), main.net.node_name(main.net.end_node(ft, fd)), int(opts[want]["turn"]), "took it" if got else "missed"])
+		if not got:
+			return _fail("holding a lane did not pick its branch")
+		p.exit_lane()
+
+	# --- GPS: with a destination set it tells you what to do, on and off the roads
+	var far_id := ""
+	var far_d := 0.0
+	for sid in main.stations:
+		var dd: float = (main.stations[sid] as Node3D).global_position.distance_to(p.global_position)
+		if dd > far_d:
+			far_d = dd
+			far_id = sid
+	GameState.set_destination("station", far_id)
+	await _wait(0.6)
+	var gi: Dictionary = main.gps_info()
+	print("gps (flight): ", gi.get("text", "-"), " / ", gi.get("then", ""))
+	if gi.is_empty():
+		await _wait(0.6)
+		gi = main.gps_info()
+		print("gps (flight): ", gi.get("text", "-"), " / ", gi.get("then", ""))
+	if gi.is_empty():
+		return _fail("GPS gave no directions")
+	if not main.gps["rides"].is_empty():
+		var r0: Dictionary = main.gps["rides"][0]
+		var gt: SpaceLane = r0["track"]
+		f = gt.frame(float(r0["enter_s"]))
+		p.global_transform = Transform3D(Basis.looking_at(f["fwd"] * int(r0["dir"]), Vector3.UP), f["origin"])
+		p.enter_lane(r0["dir"], true, gt)
+		await _wait(0.8)
+		gi = main.gps_info()
+		print("gps (on the %s): %s, %s / %s" % [gt.kind, gi.get("text", "-"), Hud._fmt_dist(gi.get("dist", 0.0)), gi.get("then", "")])
+		if gi.is_empty():
+			return _fail("GPS gave no directions on the road")
+		p.exit_lane()
+	GameState.destination = {}
 
 	# --- turns: boosting through the sharpest bend with no steering throws you off
 	var sharp := 0.0

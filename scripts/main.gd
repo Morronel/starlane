@@ -37,6 +37,9 @@ var near_highway := {}
 var _ap_plan := {}
 var _ap_plan_t := 0.0
 var _ap_plan_goal := Vector3.INF
+var gps := {}             # turn-by-turn route to the destination: {rides, leave}
+var _gps_t := 0.0
+var _gps_chimed := -1
 
 
 func _ready() -> void:
@@ -655,9 +658,10 @@ func _station_goal(st: Station) -> Vector3:
 	return st.approach_point()
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if player.autopilot and not _jumping:
 		_autopilot_plan()
+	_update_gps(delta)
 
 
 func _autopilot_plan() -> void:
@@ -696,6 +700,13 @@ func _autopilot_plan() -> void:
 			_ap_plan_t = 0.5
 			_ap_plan_goal = pgoal
 		var rides: Array = _ap_plan["rides"]
+		if rides.size() == 1:
+			# a last hop shorter than a couple of seconds at road speed isn't
+			# worth merging for (and would bounce in and out at the exit)
+			var rl: Dictionary = rides[0]
+			var cl := (rl["track"] as SpaceLane).closest(player.global_position)
+			if absf(float(rl["exit_s"]) - float(cl["s"])) < 2500.0:
+				rides = []
 		if not rides.is_empty():
 			var r0: Dictionary = rides[0]
 			var tr: SpaceLane = r0["track"]
@@ -725,6 +736,136 @@ func _autopilot_plan() -> void:
 			player.ap_route = on["rides"]
 	player.ap_goal = goal
 	player.ap_arrive_slow = slow
+
+
+# --- GPS --------------------------------------------------------------------------
+# The same planner the autopilot uses, run twice a second for the pilot: which
+# road to join, which lane to hold at each junction, where to get off. It
+# reroutes on its own when you take a different branch.
+
+func _update_gps(delta: float) -> void:
+	var flying := player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE
+	var t := dest_target() if flying and not _jumping else {}
+	if t.is_empty():
+		gps = {}
+		return
+	_gps_t -= delta
+	var lane_mode := player.mode == PlayerShip.Mode.LANE
+	if player.autopilot:
+		gps = {"rides": player.ap_route if lane_mode else _ap_plan.get("rides", [])}
+	elif _gps_t <= 0.0 or gps.is_empty() or (lane_mode and (gps["rides"].is_empty() or gps["rides"][0]["track"] != player.lane)) \
+			or (not lane_mode and gps.get("lane", false)):
+		_gps_t = 0.5
+		var top := player.top_speed()
+		var pg: Vector3 = t["pos"]
+		if lane_mode:
+			var on := net.plan(player.global_position, pg, top, player.lane, player.lane_s, player.lane_dir)
+			var off := net.plan(player.global_position, pg, top)
+			gps = {"rides": on["rides"], "lane": true, "leave": off["cost"] + 4.0 < on["cost"] or on["rides"].is_empty()}
+		else:
+			var rides: Array = net.plan(player.global_position, pg, top)["rides"]
+			if rides.size() == 1:
+				var cl := (rides[0]["track"] as SpaceLane).closest(player.global_position)
+				if absf(float(rides[0]["exit_s"]) - float(cl["s"])) < 2500.0:
+					rides = []
+			gps = {"rides": rides}
+	gps["target"] = t
+	# chime a few seconds before a junction where the route turns
+	if lane_mode:
+		var g := gps_info()
+		if g.get("junction", -1) >= 0 and g["bands"] > 1 and g["dist"] < maxf(2500.0, player.lane_speed * 4.0):
+			if _gps_chimed != g["junction"]:
+				_gps_chimed = g["junction"]
+				sfx.play("ui_tab", -2.0, 1.35)
+				if not player.autopilot:
+					GameState.message.emit(g["text"], Color(0.78, 0.58, 1.0))
+		elif g.get("junction", -1) < 0:
+			_gps_chimed = -1
+
+
+## What the GPS says right now:
+## {icon (left/right/straight/stop/exit/join/fly), text, dist, then,
+##  junction (node id or -1), band (lane to hold, -1), bands, join (Vector3)}
+func gps_info() -> Dictionary:
+	if gps.is_empty() or not gps.has("target"):
+		return {}
+	var t: Dictionary = gps["target"]
+	var rides: Array = gps["rides"]
+	var label: String = t["label"]
+	var out := {"junction": -1, "band": -1, "bands": 0, "then": ""}
+	if player.mode != PlayerShip.Mode.LANE:
+		if rides.is_empty():
+			out.merge({"icon": "fly", "text": "Fly direct to " + label, "dist": player.global_position.distance_to(t["pos"])}, true)
+			return out
+		var r0: Dictionary = rides[0]
+		var tr: SpaceLane = r0["track"]
+		var jp: Vector3 = tr.curve.sample_baked(float(r0["enter_s"]), true)
+		var toward := net.node_name(net.end_node(tr, r0["dir"])) if rides.size() > 1 or absf(float(r0["exit_s"]) - (tr.length if r0["dir"] > 0 else 0.0)) < 5.0 else label
+		out.merge({"icon": "join", "text": "Join the %s toward %s" % [tr.kind.to_upper(), toward], "dist": player.global_position.distance_to(jp), "join": jp,
+			"then": _gps_step_text(rides, 1, label)}, true)
+		return out
+	var lane := player.lane
+	var dir := player.lane_dir
+	var endp: float = lane.length if dir > 0 else 0.0
+	if gps.get("leave", false) or rides.is_empty() or rides[0]["track"] != lane:
+		out.merge({"icon": "exit", "text": "Leave the %s now" % lane.kind, "dist": 0.0, "then": "fly to " + label}, true)
+		return out
+	var r0: Dictionary = rides[0]
+	if rides.size() == 1 and absf(float(r0["exit_s"]) - endp) > 5.0:
+		out.merge({"icon": "exit", "text": "Leave the %s" % lane.kind, "dist": maxf(0.0, (float(r0["exit_s"]) - player.lane_s) * dir), "then": "fly to " + label}, true)
+		return out
+	var n := net.end_node(lane, dir)
+	var opts := player.junction_options(lane, dir)
+	out["junction"] = n
+	out["bands"] = opts.size()
+	out["dist"] = absf(endp - player.lane_s)
+	var want := -1
+	for i in opts.size():
+		if rides.size() > 1 and opts[i]["track"] == rides[1]["track"] and opts[i]["dir"] == rides[1]["dir"]:
+			want = i
+		elif rides.size() == 1 and opts[i].get("stop", false):
+			want = i
+	out["band"] = want
+	var at := net.node_name(n)
+	if want < 0:
+		out.merge({"icon": "stop", "text": "Get off at " + at, "then": "fly to " + label}, true)
+		return out
+	var o: Dictionary = opts[want]
+	if o.get("stop", false):
+		out.merge({"icon": "stop", "text": ("Keep RIGHT and stop at " if opts.size() > 1 else "Stop at ") + at, "then": "fly to " + label if t.get("station") == null else "dock at " + label}, true)
+		return out
+	var lanes_word := _lane_word(want, opts.size())
+	var kind_word := "Highway" if o["kind"] == "highway" else "Road"
+	out["icon"] = "straight" if absf(o["turn"]) < 12.0 else ("right" if o["turn"] > 0.0 else "left")
+	out["text"] = "%s: %s to %s" % [lanes_word if lanes_word != "" else "Carry on", kind_word, o["name"]]
+	out["then"] = _gps_step_text(rides, 2, label)
+	return out
+
+
+func _lane_word(i: int, nb: int) -> String:
+	if nb <= 1:
+		return ""
+	if i == 0:
+		return "Keep LEFT"
+	if i == nb - 1:
+		return "Keep RIGHT"
+	if nb == 3:
+		return "Keep MIDDLE"
+	return "Lane %d of %d" % [i + 1, nb]
+
+
+## Short text for the step after the next one.
+func _gps_step_text(rides: Array, i: int, label: String) -> String:
+	if i >= rides.size():
+		return "then arrive at " + label
+	var r: Dictionary = rides[i]
+	var tr: SpaceLane = r["track"]
+	var opts := player.junction_options(rides[i - 1]["track"], rides[i - 1]["dir"]) if i > 0 else []
+	for k in opts.size():
+		if opts[k]["track"] == tr and opts[k]["dir"] == r["dir"]:
+			var w := _lane_word(k, opts.size())
+			return "then %s at %s" % [w.to_lower() if w != "" else "carry on", net.node_name(net.end_node(rides[i - 1]["track"], rides[i - 1]["dir"]))]
+	return "then the %s toward %s" % [tr.kind, net.node_name(net.end_node(tr, r["dir"]))]
 
 
 # --- Stargate jumps -------------------------------------------------------------------
