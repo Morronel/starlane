@@ -160,6 +160,16 @@ func _run() -> void:
 			if t.kind == k:
 				t0 = t
 		print("  %s: autopilot safe speed in its sharpest turn %d m/s; push at full speed %d m/s, boosting %d m/s vs steering %d m/s" % [k, t0.safe_speed(kmax[k]), sp["speed"] * sp["speed"] * kmax[k] / sp["grip"], pow(sp["speed"] + sp["boost"], 2) * kmax[k] / sp["grip"], sp["steer"]])
+	# no junction may strand you: every track end at an interchange or
+	# crossroads offers at least one way on
+	var stranded := 0
+	for t in net.tracks:
+		for d in [1, -1]:
+			if net.nodes[net.end_node(t, d)]["kind"] != "poi" and net.allowed(t, d).is_empty():
+				stranded += 1
+	print("  dead-end junction approaches: %d" % stranded)
+	if stranded > 0:
+		return _fail("%d track ends lead nowhere" % stranded)
 	# every node reachable from every other through the network
 	for n in net.nodes:
 		var pl := net.plan(net.nodes[0]["pos"] + Vector3(0, 5, 0), n["pos"], 120.0)
@@ -306,7 +316,7 @@ func _run() -> void:
 	var s_mid: float = road.length * 0.3
 	var f: Dictionary = road.frame(s_mid)
 	var start: Vector3 = f["origin"] + f["right"] * (road.radius + 120.0)
-	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 700.0 - start).normalized(), Vector3.UP), start)
+	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 2500.0 - start).normalized(), Vector3.UP), start)
 	p._lane_was_inside = false
 	p._merge_cd = 0.0
 	GameInput.throttle = 1.0
@@ -328,7 +338,7 @@ func _run() -> void:
 	print("through ", main.net.node_name(hwy.node_b), " onto a ", p.lane.kind, " to ", main.net.node_name(main.net.end_node(p.lane, p.lane_dir)), " at ", int(p.lane_speed), " m/s")
 	p.exit_lane()
 
-	# --- junctions: no turn sharper than 60 degrees, and the lane you hold
+	# --- junctions: no turn sharper than MAX_TURN_DEG, and the lane you hold
 	# picks the branch
 	var worst := 0.0
 	var dead := 0
@@ -345,7 +355,7 @@ func _run() -> void:
 			if real.size() >= 2:
 				multi.append([t, d])
 	print("junction turns: sharpest %d deg, %d dead ends, %d forks" % [int(worst), dead, multi.size()])
-	if worst > 64.0:
+	if worst > 75.0:   # MAX_TURN_DEG, or the gentlest way on where nothing is in reach
 		return _fail("a junction turn is %d degrees" % int(worst))
 	if multi.is_empty():
 		return _fail("no junction offers a choice")
@@ -403,10 +413,17 @@ func _run() -> void:
 		print("gps (on the %s): %s, %s / %s" % [gt.kind, gi.get("text", "-"), Hud._fmt_dist(gi.get("dist", 0.0)), gi.get("then", "")])
 		if gi.is_empty():
 			return _fail("GPS gave no directions on the road")
+		# the arrow must agree with the words
+		var txt: String = gi.get("text", "")
+		if (txt.begins_with("Keep LEFT") or txt.begins_with("Bear left")) and gi["icon"] != "left":
+			return _fail("GPS says '%s' but shows a %s arrow" % [txt, gi["icon"]])
+		if (txt.begins_with("Keep RIGHT:") or txt.begins_with("Bear right")) and gi["icon"] != "right":
+			return _fail("GPS says '%s' but shows a %s arrow" % [txt, gi["icon"]])
 		p.exit_lane()
 	GameState.destination = {}
 
-	# --- turns: boosting through the sharpest bend with no steering throws you off
+	# --- turns: since 0.9.0 even the sharpest road bend can be flown flat out
+	# on boost with no steering at all (wide tubes, gentle curves)
 	var sharp := 0.0
 	var sharp_s := 0.0
 	for i in int(road.length / 50.0):
@@ -423,8 +440,24 @@ func _run() -> void:
 	ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane != road or p.lane_s > sharp_s + 1500.0, 12.0)
 	GameInput.touch_boost = false
 	print("boosting blind through a %d m bend: %s" % [int(1.0 / sharp), "thrown off" if p.mode == PlayerShip.Mode.FLIGHT else "held on"])
-	if p.mode == PlayerShip.Mode.LANE:
-		p.exit_lane()
+	if p.mode != PlayerShip.Mode.LANE:
+		return _fail("thrown off a road by its sharpest bend while boosting")
+	print("  sideways offset after the bend: %d m of %d" % [int(p.lane_offset.length()), int(road.radius)])
+	p.exit_lane()
+
+	# --- boost punch: from cruise, one second of boost nearly doubles the speed
+	p.boost_energy = 1.0
+	p.boost_drained = false
+	p.boost_level = 0.0
+	p.speed = p.top_speed()
+	GameInput.throttle = 1.0
+	GameInput.touch_boost = true
+	await _wait(1.0)
+	GameInput.touch_boost = false
+	print("boost punch: %.2fx top speed after 1 s" % (p.speed / p.top_speed()))
+	if p.speed < p.top_speed() * 1.8:
+		return _fail("boost is sluggish (%.2fx after 1 s)" % (p.speed / p.top_speed()))
+	await _wait(2.0)
 
 	# --- boost tail: drain the meter while holding boost; speed must settle
 	# smoothly instead of flickering between boost and no boost

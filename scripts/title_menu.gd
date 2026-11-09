@@ -8,7 +8,7 @@ signal loaded
 signal new_game_pressed
 signal settings_pressed
 
-const VERSION := "0.8.0"
+const VERSION := "0.9.0"
 
 var world: Node
 var saves: SavePanel

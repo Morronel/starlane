@@ -836,8 +836,16 @@ func gps_info() -> Dictionary:
 		return out
 	var lanes_word := _lane_word(want, opts.size())
 	var kind_word := "Highway" if o["kind"] == "highway" else "Road"
-	out["icon"] = "straight" if absf(o["turn"]) < 12.0 else ("right" if o["turn"] > 0.0 else "left")
-	out["text"] = "%s: %s to %s" % [lanes_word if lanes_word != "" else "Carry on", kind_word, o["name"]]
+	# arrow and words always say the same thing: at a fork both name the lane
+	# to hold (lanes are ordered left to right, so a branch that bends right
+	# can still be the LEFT lane); with a single way on, both follow the bend
+	var nb := opts.size()
+	if nb > 1:
+		out["icon"] = "left" if want == 0 else ("right" if want == nb - 1 else "straight")
+	else:
+		out["icon"] = "straight" if absf(o["turn"]) < 12.0 else ("right" if o["turn"] > 0.0 else "left")
+		lanes_word = {"straight": "Carry on", "left": "Bear left", "right": "Bear right"}[out["icon"]]
+	out["text"] = "%s: %s to %s" % [lanes_word, kind_word, o["name"]]
 	out["then"] = _gps_step_text(rides, 2, label)
 	return out
 

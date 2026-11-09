@@ -26,5 +26,7 @@ void fragment() {
 	float dist = length(VERTEX);
 	float near_fade = smoothstep(40.0, 600.0, dist);
 	float a = rim * rim_strength * near_fade + swell * swell_strength * near_fade + rails_v * rail_strength * (0.35 + 0.65 * near_fade);
-	ALBEDO = c * a * intensity;
+	// softer where several tubes overlap at a junction
+	float end_fade = mix(0.3, 1.0, smoothstep(300.0, 3500.0, UV2.x));
+	ALBEDO = c * a * intensity * end_fade;
 }
