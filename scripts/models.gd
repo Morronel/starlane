@@ -361,17 +361,22 @@ static func station(accent: Color, variant: int) -> Dictionary:
 	}
 
 
-static func gate_ring(color: Color) -> ArrayMesh:
+## Junction ring of radius r. Its members grow only with the square root of
+## the size, so a ring around a kilometre-wide tube stays slim instead of
+## turning into a wall of lit steel.
+static func gate_ring(color: Color, r := 46.0) -> ArrayMesh:
+	var g := sqrt(r / 46.0)
+	var segs := 24 if r < 200.0 else 64
 	var b := MeshBuilder.new()
 	b.xform = Transform3D(Basis(Vector3.RIGHT, PI / 2.0), Vector3.ZERO)
-	b.torus("hull", Vector3.ZERO, 46, 3.0, 24, 6, STEEL, Basis.IDENTITY, DARK)
-	b.torus("glow", Vector3.ZERO, 42.5, 0.8, 24, 4, color)
+	b.torus("hull", Vector3.ZERO, r, 3.0 * g, segs, 6, STEEL, Basis.IDENTITY, DARK)
+	b.torus("glow", Vector3.ZERO, r - 3.5 * g, 0.8 * g, segs, 4, color)
 	b.xform = Transform3D.IDENTITY
 	for k in 6:
 		var a := TAU * k / 6.0
 		var d := Vector3(cos(a), sin(a), 0)
-		b.box("hull", d * 48.0, Vector3(7, 7, 9), WHITE, Basis(Vector3.FORWARD, a))
-		b.box("glow", d * 52.0, Vector3(2, 2, 2), color)
+		b.box("hull", d * (r + 2.0 * g), Vector3(7, 7, 9) * g, STEEL, Basis(Vector3.FORWARD, a))
+		b.box("glow", d * (r + 6.0 * g), Vector3(2, 2, 2) * g, color)
 	return b.build(MeshBuilder.default_materials())
 
 

@@ -18,8 +18,8 @@ var _pending: Array = [] # [{a, b, kind, bulge}] until build_nodes() lays the tr
 var _rng: RandomNumberGenerator
 var _allowed_cache := {}
 
-const MAX_TURN_DEG := 60.0   # sharpest turn a junction offers
-const FAN_DEG := 30.0        # tracks leave a junction within +-this of its axis
+const MAX_TURN_DEG := 55.0   # sharpest turn a junction offers
+const FAN_DEG := 18.0        # tracks leave a junction within +-this of its axis
 
 
 func _init() -> void:
@@ -31,25 +31,25 @@ func _init() -> void:
 		c.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		c.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
 		c.distance_fade_min_distance = 80.0
-		c.distance_fade_max_distance = 900.0 if kind == "road" else 2500.0
+		c.distance_fade_max_distance = 2400.0 if kind == "road" else 6000.0
 		c.cull_mode = BaseMaterial3D.CULL_DISABLED
 		c.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		c.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 		mats["core_" + kind] = c
 		var d := c.duplicate() as StandardMaterial3D
 		d.distance_fade_min_distance = 30.0
-		d.distance_fade_max_distance = 300.0
+		d.distance_fade_max_distance = 900.0
 		mats["deco_" + kind] = d
 	var hw: ShaderMaterial = mats["tube_highway"]
-	hw.set_shader_parameter("rails", 8.0)
-	hw.set_shader_parameter("rim_strength", 0.34)
-	hw.set_shader_parameter("swell_strength", 0.06)
-	hw.set_shader_parameter("rail_strength", 0.14)
+	hw.set_shader_parameter("rails", 12.0)
+	hw.set_shader_parameter("rim_strength", 0.15)
+	hw.set_shader_parameter("swell_strength", 0.03)
+	hw.set_shader_parameter("rail_strength", 0.08)
 	var rd: ShaderMaterial = mats["tube_road"]
-	rd.set_shader_parameter("rails", 3.0)
-	rd.set_shader_parameter("rim_strength", 0.16)
+	rd.set_shader_parameter("rails", 6.0)
+	rd.set_shader_parameter("rim_strength", 0.08)
 	rd.set_shader_parameter("swell_strength", 0.0)
-	rd.set_shader_parameter("rail_strength", 0.09)
+	rd.set_shader_parameter("rail_strength", 0.06)
 	for i in 4:
 		_traffic_meshes.append(Models.freighter(1000 + i * 77))
 
@@ -64,15 +64,16 @@ func set_palette(sky: Dictionary) -> void:
 	var h2 := c1.lerp(Color(1.0, 0.97, 0.9), 0.3)
 	_tint("road", c2, c2.lerp(c1, 0.5))
 	_tint("highway", h1, h2)
-	mats["ring_road"] = Models.gate_ring(c2)
-	mats["ring_highway"] = Models.gate_ring(h1)
+	mats["ring_road"] = Models.gate_ring(c2, SpaceLane.KINDS["road"]["radius"] * 1.1)
+	mats["ring_highway"] = Models.gate_ring(h1, SpaceLane.KINDS["highway"]["radius"] * 1.1)
 
 
 func _tint(kind: String, a: Color, b: Color) -> void:
 	var m: ShaderMaterial = mats["tube_" + kind]
 	m.set_shader_parameter("color", Vector3(a.r, a.g, a.b))
 	m.set_shader_parameter("color2", Vector3(b.r, b.g, b.b))
-	(mats["core_" + kind] as StandardMaterial3D).albedo_color = a * (0.5 if kind == "road" else 0.75)
+	# the tubes are big now, so everything on them glows more softly
+	(mats["core_" + kind] as StandardMaterial3D).albedo_color = a * (0.28 if kind == "road" else 0.4)
 	(mats["deco_" + kind] as StandardMaterial3D).albedo_color = b * (0.9 if kind == "road" else 0.55)
 
 
@@ -158,7 +159,7 @@ func _layout_junctions() -> void:
 					group.append(en)
 			group.sort_custom(func(x, y): return x["ang"] < y["ang"])
 			var m := group.size()
-			var spread := deg_to_rad(minf(FAN_DEG, 22.0 * (m - 1)))
+			var spread := deg_to_rad(minf(FAN_DEG, 14.0 * (m - 1)))
 			for i in m:
 				var a := 0.0 if m == 1 else lerpf(-spread, spread, float(i) / (m - 1))
 				var tan := axis.rotated(Vector3.UP, a)
@@ -189,37 +190,48 @@ func _lay_track(a: int, b: int, kind: String, rng: RandomNumberGenerator, bulge:
 	var side := fwd.cross(Vector3.UP).normalized()
 	var up := side.cross(fwd).normalized()
 	var hw := kind == "highway"
-	var half_wave := 17000.0 if hw else 4800.0
+	var half_wave := 26000.0 if hw else 9000.0
 	var waves := maxf(1.0, round(L / half_wave))
-	var amp := (rng.randf_range(1400.0, 2000.0) if hw else rng.randf_range(400.0, 700.0)) * minf(1.0, L / (half_wave * 1.5))
+	var amp := (rng.randf_range(1200.0, 1800.0) if hw else rng.randf_range(300.0, 600.0)) * minf(1.0, L / (half_wave * 1.5))
 	var ph := rng.randf() * TAU
 	var flip := 1.0 if rng.randf() < 0.5 else -1.0
 	var vamp := rng.randf_range(150.0, 450.0) if hw else rng.randf_range(80.0, 300.0)
-	var k_lim := 1.0 / (2600.0 if not hw else 9500.0)
-	var m0 := ta * L * 0.75
-	var m1 := -tb * L * 0.75
+	var k_lim := 1.0 / (8000.0 if not hw else 20000.0)
+	var n := maxi(10, int(L / (600.0 if hw else 300.0)))
+	# 1) the base curve: leave each junction on its fan line, but if that
+	# bends harder than k_lim, ease the end directions toward the straight
+	# line until it doesn't (a slightly bigger junction turn is far easier to
+	# fly than a tight bend in the middle of nowhere)
 	var pts := []
+	var relax := 1.0
+	var tlen := L
+	var ta0 := ta
+	var tb0 := tb
+	for attempt in 10:
+		ta = fwd.slerp(ta0, relax).normalized() if ta0.dot(fwd) > -0.99 else ta0
+		tb = (-fwd).slerp(tb0, relax).normalized() if tb0.dot(-fwd) > -0.99 else tb0
+		# the best tangent length depends on the shape (C or S bend), so try a few
+		var best_k := INF
+		for c in [0.9, 1.15, 1.4]:
+			var cand := _hermite_pts(pa, pb, ta * L * c, -tb * L * c, n, bulge, Vector3.ZERO, 0.0, 1.0, 1.0, Vector3.ZERO, 0.0, 0.0)
+			var kc := _kmax(cand)
+			if kc < best_k:
+				best_k = kc
+				pts = cand
+				tlen = L * c
+		if best_k <= k_lim * 0.85 or relax <= 0.0:
+			break
+		relax = maxf(0.0, relax - 0.12)
+	# 2) gentle wiggles on top, scaled down until the whole track stays under k_lim
 	var scale := 1.0
-	for attempt in 5:
-		pts = []
-		var n := maxi(10, int(L / (600.0 if hw else 300.0)))
-		for i in n + 1:
-			var f := float(i) / n
-			var f2 := f * f
-			var f3 := f2 * f
-			var base := pa * (2 * f3 - 3 * f2 + 1) + m0 * (f3 - 2 * f2 + f) + pb * (-2 * f3 + 3 * f2) + m1 * (f3 - f2)
-			# wiggles fade out well before the ends so tracks leave junctions on their fan line
-			var env := pow(sin(f * PI), 3.0)
-			var wig := sin(f * PI * waves) * env * flip
-			pts.append(base + side * (wig * amp * scale) + up * (sin(f * TAU + ph) * vamp * env * scale) + bulge * pow(sin(f * PI), 2.0))
-		var kmax := 0.0
-		for i in range(1, pts.size() - 1):
-			var u: Vector3 = pts[i] - pts[i - 1]
-			var w: Vector3 = pts[i + 1] - pts[i]
-			kmax = maxf(kmax, u.angle_to(w) / ((u.length() + w.length()) * 0.5))
+	for attempt in 8:
+		pts = _hermite_pts(pa, pb, ta * tlen, -tb * tlen, n, bulge, side, amp * scale, waves, flip, up, vamp * scale, ph)
+		var kmax := _kmax(pts)
 		if kmax <= k_lim:
 			break
-		scale *= clampf(k_lim / kmax, 0.3, 0.95)
+		scale *= clampf(k_lim / kmax, 0.3, 0.9)
+		if attempt == 7:
+			pts = _hermite_pts(pa, pb, ta * tlen, -tb * tlen, n, bulge, side, 0.0, waves, flip, up, 0.0, ph)
 	var t := SpaceLane.new()
 	t.kind = kind
 	t.node_a = a
@@ -236,6 +248,35 @@ func _lay_track(a: int, b: int, kind: String, rng: RandomNumberGenerator, bulge:
 	return t
 
 
+func _hermite_pts(pa: Vector3, pb: Vector3, m0: Vector3, m1: Vector3, n: int, bulge: Vector3,
+		side: Vector3, amp: float, waves: float, flip: float, up: Vector3, vamp: float, ph: float) -> Array:
+	var pts := []
+	# the bulge is a smooth arch (no kink in its curvature); take its slope at
+	# the ends out of the end tangents so the track still leaves on its fan line
+	m0 -= bulge * PI
+	m1 += bulge * PI
+	for i in n + 1:
+		var f := float(i) / n
+		var f2 := f * f
+		var f3 := f2 * f
+		var base := pa * (2 * f3 - 3 * f2 + 1) + m0 * (f3 - 2 * f2 + f) + pb * (-2 * f3 + 3 * f2) + m1 * (f3 - f2)
+		# wiggles fade out well before the ends so tracks leave junctions on their fan line
+		var env := pow(sin(f * PI), 3.0)
+		var wig := sin(f * PI * waves) * env * flip
+		pts.append(base + side * (wig * amp) + up * (sin(f * TAU + ph) * vamp * env) + bulge * sin(f * PI))
+	return pts
+
+
+## Sharpest bend (1/m) of a polyline.
+static func _kmax(pts: Array) -> float:
+	var kmax := 0.0
+	for i in range(1, pts.size() - 1):
+		var u: Vector3 = pts[i] - pts[i - 1]
+		var w: Vector3 = pts[i + 1] - pts[i]
+		kmax = maxf(kmax, u.angle_to(w) / ((u.length() + w.length()) * 0.5))
+	return kmax
+
+
 ## Junction structures: a slowly turning double ring at interchanges, a
 ## single ring at crossroads.
 func build_nodes(sky: Dictionary) -> void:
@@ -247,7 +288,7 @@ func build_nodes(sky: Dictionary) -> void:
 		var holder := Node3D.new()
 		add_child(holder)
 		holder.global_position = nd["pos"]
-		var sc := (560.0 if hub else 200.0) / 46.0
+		var sc := 1.12   # just outside the tube-sized junction rings
 		for k in (3 if hub else 1):
 			var mi := MeshInstance3D.new()
 			mi.mesh = mats["ring_highway" if hub else "ring_road"]
@@ -325,13 +366,20 @@ func allowed(t: SpaceLane, dir: int) -> Array:
 	var arrive: Vector3 = ((f["origin"] as Vector3) - (back["origin"] as Vector3)).normalized()
 	var right := arrive.cross(Vector3.UP).normalized()
 	var out := []
+	var gentlest := {}
 	for b in branches(t, dir):
 		var o: Vector3 = b["out"]
 		var ang := rad_to_deg(arrive.angle_to(o))
-		if ang > MAX_TURN_DEG + 4.0:
-			continue
 		b["turn"] = ang * (1.0 if o.dot(right) > 0.0 else -1.0)
+		if ang > MAX_TURN_DEG + 4.0:
+			# never strand a rider: if nothing else is in reach, the gentlest
+			# way on (short of a U-turn) is still offered
+			if ang < 120.0 and (gentlest.is_empty() or ang < absf(gentlest["turn"])):
+				gentlest = b
+			continue
 		out.append(b)
+	if out.is_empty() and not gentlest.is_empty():
+		out.append(gentlest)
 	out.sort_custom(func(x, y): return x["turn"] < y["turn"])
 	_allowed_cache[key] = out
 	return out

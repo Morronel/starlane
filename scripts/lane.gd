@@ -12,12 +12,14 @@ extends Node3D
 ## steer = sideways steering rate inside the tube (m/s),
 ## grip = how hard turns push you outward (higher = gentler).
 const KINDS := {
-	# grip scales with speed squared (2x speed -> 4x grip) so turns push you
-	# toward the wall exactly as hard as before; only the pace changes
-	"road": {"radius": 220.0, "merge": 420.0, "min": 560.0, "speed": 1800.0, "boost": 760.0, "ap": 1440.0,
-		"accel": 1.1, "steer": 260.0, "grip": 6.0, "label": "ROAD"},
-	"highway": {"radius": 600.0, "merge": 900.0, "min": 1350.0, "speed": 6000.0, "boost": 2400.0, "ap": 4650.0,
-		"accel": 0.42, "steer": 430.0, "grip": 11.0, "label": "HIGHWAY"},
+	# 0.9.0: tubes ~4x wider and turns ~4x gentler (X3-style), so they can be
+	# flown by hand. steer scales with the width so crossing the tube takes
+	# about as long as it used to; grip is set so even a full-boost run through
+	# the sharpest bend pushes you out at well under half your steering.
+	"road": {"radius": 880.0, "merge": 1200.0, "min": 560.0, "speed": 1800.0, "boost": 1100.0, "ap": 1440.0,
+		"accel": 1.1, "boost_accel": 2.6, "steer": 620.0, "grip": 6.0, "label": "ROAD"},
+	"highway": {"radius": 2200.0, "merge": 2700.0, "min": 1350.0, "speed": 6000.0, "boost": 3400.0, "ap": 4650.0,
+		"accel": 0.42, "boost_accel": 1.2, "steer": 1250.0, "grip": 11.0, "label": "HIGHWAY"},
 }
 const TRAFFIC_SIDE := 0.45   # traffic rides at this fraction of the radius, right of centre
 
@@ -160,8 +162,8 @@ func next_exit(s: float, dir: int) -> Dictionary:
 
 func _build_tube(mats: Dictionary) -> void:
 	var hw := kind == "highway"
-	var sides := 18 if hw else 10
-	var step := 160.0 if hw else 110.0
+	var sides := 28 if hw else 18
+	var step := 220.0 if hw else 140.0
 	var n := int(ceil(length / step))
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -173,6 +175,9 @@ func _build_tube(mats: Dictionary) -> void:
 			var dir: Vector3 = f["right"] * cos(a) + f["up"] * sin(a)
 			st.set_normal(dir)
 			st.set_uv(Vector2(s, float(k) / sides))
+			# distance to the nearer end: the shader dims tubes where they
+			# bunch up at a junction so the overlap doesn't blow out
+			st.set_uv2(Vector2(minf(s, length - s), 0.0))
 			st.add_vertex(f["origin"] + dir * radius)
 	for i in n:
 		for k in sides:
@@ -188,7 +193,7 @@ func _build_tube(mats: Dictionary) -> void:
 	core.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var cstep := 200.0
 	var cn := int(ceil(length / cstep))
-	var w := 26.0 if hw else 6.0
+	var w := 30.0 if hw else 10.0
 	var lanes := [-0.22, 0.22] if hw else [0.0]
 	for i in cn:
 		var f0 := frame(i * cstep)
@@ -220,7 +225,7 @@ func _build_tube(mats: Dictionary) -> void:
 				var d1: Vector3 = f["right"] * cos(a1) + f["up"] * sin(a1)
 				var ri := radius * 1.02
 				var ro := radius * 1.12
-				var z: Vector3 = f["fwd"] * 14.0
+				var z: Vector3 = f["fwd"] * 30.0
 				for v in [d0 * ri - z, d0 * ro - z, d1 * ro - z, d0 * ri - z, d1 * ro - z, d1 * ri - z,
 						d0 * ri + z, d1 * ro + z, d0 * ro + z, d0 * ri + z, d1 * ri + z, d1 * ro + z]:
 					deco.add_vertex(f["origin"] + v)
@@ -233,8 +238,8 @@ func _build_tube(mats: Dictionary) -> void:
 			for a in [0.25, 0.75, 1.25, 1.75]:
 				var d: Vector3 = f["right"] * cos(a * PI) + f["up"] * sin(a * PI)
 				var c: Vector3 = f["origin"] + d * radius
-				var t1: Vector3 = f["fwd"] * 9.0
-				var t2: Vector3 = d.cross(f["fwd"]) * 9.0
+				var t1: Vector3 = f["fwd"] * 22.0
+				var t2: Vector3 = d.cross(f["fwd"]) * 22.0
 				for v in [c - t1, c + t2, c + t1, c - t1, c + t1, c - t2]:
 					deco.add_vertex(v)
 	_add_mesh(deco.commit(), mats["deco_" + kind])
@@ -245,7 +250,7 @@ func _build_tube(mats: Dictionary) -> void:
 		var g := MeshInstance3D.new()
 		g.mesh = mats["ring_" + kind]
 		add_child(g)
-		var sc := radius / 46.0 * 1.1
+		var sc := 1.0   # the ring mesh is already built at the tube size
 		g.global_transform = Transform3D(Basis.looking_at(f["fwd"], f["up"]).scaled(Vector3.ONE * sc), f["origin"])
 
 

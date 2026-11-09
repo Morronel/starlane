@@ -139,7 +139,9 @@ func _drive(delta: float, target_speed: float) -> void:
 	var boosting := _boosting(delta)
 	if boost_level > 0.001:
 		target_speed = maxf(target_speed, top_speed() * (1.0 + 1.1 * boost_level))
-	speed = lerpf(speed, target_speed, 1.0 - exp(-delta * lerpf(1.4, 2.2, boost_level)))
+	# boost kicks in hard (like before 0.7.0); only easing off stays soft
+	var rate := lerpf(1.4, 3.2, boost_level) if speed < target_speed else lerpf(1.4, 2.2, boost_level)
+	speed = lerpf(speed, target_speed, 1.0 - exp(-delta * rate))
 	if not boosting and absf(speed - target_speed) < 0.5:
 		speed = target_speed
 	var fwd := -global_transform.basis.z
@@ -175,12 +177,15 @@ func _boosting(delta: float) -> bool:
 		boost_energy = minf(1.0, boost_energy + delta * 0.12)
 		if boost_energy >= 0.25:
 			boost_drained = false
-	boost_level = move_toward(boost_level, want, delta * (1.6 if want < boost_level else 2.5))
+	# snap up almost at once on press, ease down slowly on release / empty meter
+	boost_level = move_toward(boost_level, want, delta * (1.6 if want < boost_level else 12.0))
+	boost_fx = move_toward(boost_fx, 1.0 if held and want >= 0.99 else want * 0.5, delta * (8.0 if held else 1.5))
 	return held
 
 
 const DRAINED_BOOST := 0.3      # share of the full boost you keep on an empty meter
 var boost_level := 0.0           # eased 0..1 boost strength actually applied
+var boost_fx := 0.0              # 0..1 kick for the camera (FOV punch) while boosting
 var boost_drained := false
 
 
@@ -494,7 +499,10 @@ func _lane_ride(delta: float) -> void:
 	if lane_speed > target_speed + 150.0:
 		lane_speed = move_toward(lane_speed, target_speed, delta * maxf(2500.0, lane_speed * 0.9))   # braking
 	else:
-		lane_speed = lerpf(lane_speed, target_speed, 1.0 - exp(-delta * float(sp["accel"])))
+		# boost pulls much harder than the throttle alone
+		var acc: float = sp["boost_accel"] if boosting and lane_speed < target_speed else sp["accel"]
+		lane_speed = lerpf(lane_speed, target_speed, 1.0 - exp(-delta * acc))
+	boost_fx = move_toward(boost_fx, 1.0 if boosting else 0.0, delta * (8.0 if boosting else 1.5))
 	var s_prev := lane_s
 	lane_s += lane_dir * lane_speed * delta
 
@@ -571,7 +579,10 @@ func _lane_ride(delta: float) -> void:
 	var fwd: Vector3 = f["fwd"] * lane_dir
 	var pos: Vector3 = f["origin"] + f["right"] * lane_offset.x + f["up"] * lane_offset.y
 	var want_b := Basis.looking_at(fwd, f["up"])
-	_ride_basis = _ride_basis.slerp(want_b, 1.0 - exp(-delta * 9.0)).orthonormalized()
+	# right after a junction the nose swings over to the new track gently
+	# instead of snapping, so the turn reads as a smooth curve
+	_switch_ease = maxf(0.0, _switch_ease - delta / 1.6)
+	_ride_basis = _ride_basis.slerp(want_b, 1.0 - exp(-delta * lerpf(9.0, 1.6, _switch_ease))).orthonormalized()
 	# lean into the push of the turn
 	var lean := Vector2(push.x * lane_dir, push.y) / float(sp["steer"])
 	bank = lerpf(bank, -steer.x * 0.5 + lean.x * 0.35, 1.0 - exp(-delta * 4.0))
@@ -583,6 +594,7 @@ func _lane_ride(delta: float) -> void:
 
 var drift_push := Vector2.ZERO
 var _ride_basis := Basis.IDENTITY
+var _switch_ease := 0.0
 
 
 func lane_kind_word() -> String:
@@ -601,6 +613,7 @@ func _switch_track(b: Dictionary) -> void:
 	var rel: Vector3 = wp - nf["origin"]
 	lane_offset = Vector2(rel.dot(nf["right"]), rel.dot(nf["up"])).limit_length(lane.radius * 0.55)
 	junction = {}
+	_switch_ease = 1.0
 	if autopilot and ap_route.size() > 1 and ap_route[1]["track"] == lane:
 		ap_route.pop_front()
 	world.sfx.play("lane_merge", -7.0)
