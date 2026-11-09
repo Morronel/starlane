@@ -141,6 +141,17 @@ func buy_price(sid: String, g: String) -> int:
 	return int(ceil(sell_price(sid, g) * (1.0 + SPREAD)))
 
 
+## What a good sells for on average across every station that trades it.
+func average_sell(g: String) -> float:
+	var t := 0.0
+	var n := 0
+	for sid in cap:
+		if cap[sid].has(g):
+			t += sell_price(sid, g)
+			n += 1
+	return t / n if n > 0 else float(GOODS[g]["base"])
+
+
 func available(sid: String, g: String) -> int:
 	if not stock.has(sid) or not stock[sid].has(g):
 		return 0

@@ -418,6 +418,14 @@ func _build_missions() -> void:
 			var tc := _card(UiKit.ACCENT)
 			_text_block(tc[1], "TRIP LOG", n.substr(5), UiKit.ACCENT)
 			continue
+		if n.begins_with("HOME|"):
+			var hc := _card(Color(1.0, 0.8, 0.5))
+			_text_block(hc[1], "HOME", n.substr(5), Color(1.0, 0.8, 0.5))
+			continue
+		if n.begins_with("WHILE YOU WERE AWAY") or n.begins_with("NEXT CHAPTER") or n.begins_with("THE LOST LANES"):
+			var sc := _card(Color(0.75, 1.0, 0.85))
+			_text_block(sc[1], n.get_slice(":", 0), n.substr(n.find(":") + 1).strip_edges(), Color(0.75, 1.0, 0.85))
+			continue
 		var c := _card(UiKit.GOLD)
 		_text_block(c[1], "PAYMENT RECEIVED" if n.ends_with(" cr") else "STATION NOTICE", n, UiKit.GOLD)
 	_notes = []
@@ -474,6 +482,28 @@ func _build_estate() -> void:
 	var sv := _text_block(cs[1], "LIFETIME ESTATE EARNINGS  %s CR" % _fmt(int(GameState.estate_bank)),
 		"%d properties  ·  rent about %d cr/min  ·  %d ship%s hauling for you" % [GameState.props.size(), int(rate), flying, "" if flying == 1 else "s"], UiKit.GOLD)
 	sv.add_child(_label("Ranks:  Trader %s  ·  Combat %s  ·  Explorer %s" % [GameState.rank_name("trader"), GameState.rank_name("combat"), GameState.rank_name("explorer")], 16, UiKit.TEXT_DIM, UiKit.body(600)))
+	# 1.0 home
+	var is_rest: bool = Galaxy.station(sid).get("rest", false)
+	if not GameState.home.is_empty() or is_rest:
+		var ch := _card(Color(1.0, 0.8, 0.5))
+		if GameState.home.is_empty():
+			_text_block(ch[1], "MAKE THIS PLACE HOME", "Buy the back rooms of %s. Docking here repairs you and refills jump charges for free, and you can add a garden, an observatory and a pilot lounge." % station.display_name, Color(1.0, 0.8, 0.5))
+			_btn(ch[1], "BUY HOME\n%s" % _fmt(GameState.HOME_COST), _do_buy_home, GameState.credits < GameState.HOME_COST, 170).custom_minimum_size.y = 64
+		elif GameState.home["station"] != sid:
+			_text_block(ch[1], "HOME", "Your home is at %s." % Galaxy.station_name(GameState.home["station"]), Color(1.0, 0.8, 0.5))
+		else:
+			var hv := _text_block(ch[1], "HOME SWEET HOME", "Your home at %s." % station.display_name, Color(1.0, 0.8, 0.5))
+			for k in GameState.HOME_UPGRADES:
+				var u: Dictionary = GameState.HOME_UPGRADES[k]
+				var have := GameState.home_has(k)
+				var row := HBoxContainer.new()
+				row.add_theme_constant_override("separation", 10)
+				var tl := _label("%s%s: %s" % ["✓ " if have else "", u["name"], u["desc"]], 15, UiKit.GOOD if have else UiKit.TEXT_DIM, UiKit.body(600), true)
+				tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				row.add_child(tl)
+				if not have:
+					_btn(row, "ADD %s" % _fmt(u["price"]), _do_home_upgrade.bind(k), GameState.credits < int(u["price"]), 150)
+				hv.add_child(row)
 	# property at this station
 	_content.add_child(_label("PROPERTY AT %s" % station.display_name.to_upper(), 18, UiKit.ACCENT, UiKit.display(700, 2)))
 	_prop_card(sid, "stall", "", "MARKET STALL", "A little stand on the concourse. Rent: %d cr/min per level." % int(Estate.STALL_RATE * 60.0), Estate.STALL_COST, true)
@@ -537,6 +567,30 @@ func _build_estate() -> void:
 		var lv := _text_block(cl[1], "LEDGER", "")
 		for e in GameState.estate_log.slice(0, 8):
 			lv.add_child(_label("· " + str(e["text"]), 15, UiKit.TEXT_DIM, UiKit.body(500), true))
+
+
+func _do_buy_home(b: Control) -> void:
+	var before := GameState.credits
+	if GameState.buy_home(station.station_id):
+		_money(GameState.credits - before)
+		world.sfx.play("cheers", -3.0)
+		_sparkle(b, Color(1.0, 0.8, 0.5))
+		GameState.message.emit("Home sweet home. The kettle's already on.", Color(1.0, 0.8, 0.5))
+		GameState.save_game()
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_home_upgrade(b: Control, k: String) -> void:
+	var before := GameState.credits
+	if GameState.buy_home_upgrade(k):
+		_money(GameState.credits - before)
+		world.sfx.ui("upgrade")
+		_sparkle(b, UiKit.GOOD)
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
 
 
 func _prop_card(sid: String, kind: String, good: String, title: String, body: String, cost: int, allowed: bool) -> void:
@@ -696,6 +750,27 @@ func _build_bar() -> void:
 		_text_block(cr[1], "%s  ·  %s" % [rg["name"].to_upper(), rg["role"]], body, Color(1, 1, 1))
 		if not heard:
 			_btn(cr[1], "TIP 120 cr", _do_tip.bind(i), GameState.credits < 120, 150)
+	# 1.0 the Lost Lanes: Brother Ambry drinks at Lantern bars
+	if fac == "lantern" and GameState.story_step < GameState.STORY_DONE:
+		var cs := _card(Color(0.75, 1.0, 0.85))
+		cs[1].add_child(Portraits.control(hash("Brother Ambry") + 1, Vector2(84, 84), Color(0.1, 0.18, 0.15)))
+		var cur := {}
+		for m in GameState.missions:
+			if m.get("story", false):
+				cur = m
+		if GameState.story_step == 0:
+			_text_block(cs[1], "BROTHER AMBRY  ·  LANTERN MONK", "\"Have you noticed the beacons hum? Same note, every system. Somebody tuned them before we ever got here. Want to help an old monk find out who?\"", Color(0.75, 1.0, 0.85))
+			_btn(cs[1], "LISTEN", _do_story, false, 130)
+		elif not cur.is_empty():
+			_text_block(cs[1], "BROTHER AMBRY  ·  " + str(cur["title"]).to_upper(), "\"%s\"" % cur["desc"], Color(0.75, 1.0, 0.85))
+	# 0.15 wanted poster
+	var wp := GameState.wanted_poster(sid)
+	if not wp.is_empty():
+		var cw := _card(UiKit.BAD)
+		cw[1].add_child(Portraits.control(int(wp["wanted"]["seed"]), Vector2(84, 84), Color(0.25, 0.12, 0.1)))
+		var wv := _text_block(cw[1], wp["title"], wp["desc"], UiKit.BAD)
+		wv.add_child(_label("BOUNTY  %s CR" % _fmt(wp["reward"]), 17, UiKit.GOLD, UiKit.display(700)))
+		_btn(cw[1], "TAKE IT", _do_poster.bind(wp), false, 130)
 	# Orbit dice
 	var cdice := _card(Color(1.0, 0.6, 0.9))
 	var dv := _text_block(cdice[1], "ORBIT DICE", "Two dice each. Doubles beat any plain roll, then highest wins. Doubles pay double.", Color(1.0, 0.6, 0.9))
@@ -748,6 +823,25 @@ func _postcard_album() -> void:
 				box.add_child(tr)
 		box.add_child(_label(str(pc.get("name", id)), 14, Color(1, 1, 1), UiKit.display(700)))
 		flow.add_child(box)
+
+
+func _do_story(b: Control) -> void:
+	var m := GameState.story_next()
+	if m.is_empty():
+		return
+	world.sfx.play("event_ping", -3.0)
+	_sparkle(b, Color(0.75, 1.0, 0.85))
+	GameState.message.emit("New story contract: " + m["title"], Color(0.75, 1.0, 0.85))
+	world._spawn_mission_props()
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_poster(b: Control, m: Dictionary) -> void:
+	GameState.accept_poster(m)
+	world.sfx.ui("upgrade")
+	_sparkle(b, UiKit.BAD)
+	GameState.message.emit("You pocket the poster. %s won't know what hit them." % m["wanted"]["name"], UiKit.GOLD)
+	_rebuild_keep_scroll.call_deferred()
 
 
 func _do_round(b: Control, cost: int) -> void:
@@ -1503,6 +1597,30 @@ func _do_accept(b: Control, m: Dictionary, col: Color) -> void:
 	_rebuild.call_deferred()
 
 
+func _do_paint(b: Control, i: int) -> void:
+	var before := GameState.credits
+	if GameState.buy_paint(i):
+		world.player.refresh_ship()
+		_money(GameState.credits - before)
+		world.sfx.play("craft", -6.0)
+		_sparkle(b, GameState.PAINTS[i]["color"])
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_trinket(b: Control, id: String) -> void:
+	var before := GameState.credits
+	if GameState.buy_trinket(id):
+		_money(GameState.credits - before)
+		world.sfx.ui("buy")
+		_sparkle(b, Color(0.6, 1.0, 0.8))
+		GameState.message.emit("%s installed on your dash. Say hi in first person." % GameState.TRINKETS[id]["name"], Color(0.6, 1.0, 0.8))
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
 func _do_repair(b: Control) -> void:
 	var before := GameState.credits
 	if GameState.repair():
@@ -1556,3 +1674,44 @@ func _build_services() -> void:
 	for k in GameState.visited:
 		visited += 1
 	v3.add_child(_label("Raiders destroyed: %d      Systems visited: %d / %d" % [GameState.kills, visited, Galaxy.SYSTEMS.size()], 17, UiKit.TEXT_DIM, UiKit.body(500)))
+	v3.add_child(_label("Lifetime trade profit: %s cr   ·   %d km flown   ·   %d postcards" % [_fmt(int(GameState.lifetime.get("profit", 0))), int(GameState.lifetime.get("km", 0.0)), GameState.postcards.size()], 17, UiKit.TEXT_DIM, UiKit.body(500)))
+	# 0.14 ranks
+	var cr := _card(UiKit.GOLD)
+	var rv := _text_block(cr[1], "RANKS", "", UiKit.GOLD)
+	for track in GameState.RANKS:
+		var rd: Dictionary = GameState.RANKS[track]
+		var i := GameState.rank_index(track)
+		var steps: Array = rd["steps"]
+		var nxt := "max rank" if i >= steps.size() - 1 else "next: %s at %s" % [rd["names"][i + 1], _fmt(int(steps[i + 1]))]
+		rv.add_child(_label("%s  ·  %s   (%s, %s)" % [rd["title"].to_upper(), rd["names"][i], _fmt(int(GameState.rank_value(track))), nxt], 17, Color(1, 1, 1), UiKit.display(700)))
+	# 0.13 factions
+	var cf := _card(Color(0.75, 0.85, 1.0))
+	var fv := _text_block(cf[1], "FACTIONS", "", Color(0.75, 0.85, 1.0))
+	for f in Factions.LIST:
+		var r := GameState.get_rep(f)
+		fv.add_child(_label("%s  ·  %s (%d)%s" % [Factions.LIST[f]["name"], Factions.standing(r), r, "  ·  " + Factions.LIST[f]["licence"].to_upper() if GameState.has_licence(f) else ""], 16, Factions.standing_color(r), UiKit.body(600)))
+	# 0.14 paint shop (shipyards) and trinkets
+	if Galaxy.station(station.station_id).has("ships"):
+		var cp := _card(Color(1.0, 0.6, 0.85))
+		var pv := _text_block(cp[1], "PAINT SHOP  ·  500 CR", "Current: %s" % ("factory finish" if GameState.paint < 0 else GameState.PAINTS[GameState.paint]["name"]), Color(1.0, 0.6, 0.85))
+		var flow := HFlowContainer.new()
+		flow.add_theme_constant_override("h_separation", 8)
+		pv.add_child(flow)
+		for i in GameState.PAINTS.size():
+			var pb := UiKit.button(GameState.PAINTS[i]["name"].to_upper(), Vector2(150, 48), 13)
+			pb.add_theme_color_override("font_color", GameState.PAINTS[i]["color"])
+			pb.disabled = GameState.paint == i
+			pb.pressed.connect(_do_paint.bind(pb, i))
+			flow.add_child(pb)
+	var ct := _card(Color(0.6, 1.0, 0.8))
+	var tv := _text_block(ct[1], "DASHBOARD TRINKETS", "Something to keep you company in first person. Current: %s" % ("nothing" if GameState.trinket == "" else GameState.TRINKETS[GameState.trinket]["name"]), Color(0.6, 1.0, 0.8))
+	var tflow := HFlowContainer.new()
+	tflow.add_theme_constant_override("h_separation", 8)
+	tv.add_child(tflow)
+	for id in GameState.TRINKETS:
+		var tb := UiKit.button("%s  %d" % [GameState.TRINKETS[id]["name"].to_upper(), GameState.TRINKETS[id]["price"]], Vector2(230, 48), 13)
+		tb.disabled = GameState.trinket == id
+		tb.pressed.connect(_do_trinket.bind(tb, id))
+		tflow.add_child(tb)
+	if not GameState.postcards.is_empty():
+		_postcard_album()

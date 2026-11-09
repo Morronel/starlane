@@ -8,7 +8,7 @@ signal loaded
 signal new_game_pressed
 signal settings_pressed
 
-const VERSION := "0.9.0"
+const VERSION := "1.0.0"
 
 var world: Node
 var saves: SavePanel
@@ -60,7 +60,7 @@ func _ready() -> void:
 	title.add_theme_constant_override("shadow_offset_y", 0)
 	title.add_theme_constant_override("shadow_outline_size", 14)
 	v.add_child(title)
-	var sub := Modal.label("TRADE  ·  FIGHT  ·  RIDE THE LANES", 16, UiKit.TEXT_DIM, UiKit.display(600, 4))
+	var sub := Modal.label("TRADE  ·  TRAVEL  ·  FIND THE LOST LANES", 16, UiKit.TEXT_DIM, UiKit.display(600, 4))
 	v.add_child(sub)
 	var gap := Control.new()
 	gap.custom_minimum_size = Vector2(0, 30)

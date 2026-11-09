@@ -76,7 +76,17 @@ func _ready() -> void:
 ## Rebuild the model and hardpoints after buying a ship.
 func refresh_ship() -> void:
 	var id: String = GameState.ship
-	(model as MeshInstance3D).mesh = Models.ship(id)
+	var mesh := Models.ship(id)
+	(model as MeshInstance3D).mesh = mesh
+	# 0.14 paint job: tint the hull surface
+	for i in mesh.get_surface_count():
+		(model as MeshInstance3D).set_surface_override_material(i, null)
+	if GameState.paint >= 0:
+		var hi := mesh.surface_find_by_name("hull")
+		if hi >= 0:
+			var m: StandardMaterial3D = MeshBuilder.hull_material().duplicate()
+			m.albedo_color = (GameState.PAINTS[GameState.paint]["color"] as Color).lerp(Color.WHITE, 0.15)
+			(model as MeshInstance3D).set_surface_override_material(hi, m)
 	cam_scale = Models.ship_size(id)
 	hardpoints = Models.hardpoints(id)
 	engine_glow.position = Vector3(0, 0.5, 6.0 * cam_scale + 2.5)

@@ -140,6 +140,9 @@ func restart_from_save(first := false) -> void:
 	camera.global_position = st.global_position + Vector3(300, 120, -300)
 	camera.look_at(st.global_position)
 	var notes := ["Welcome aboard, pilot. Take a contract, trade cargo, then LAUNCH."] if first and GameState.kills == 0 else []
+	if GameState.away_report != "":
+		notes.append(GameState.away_report)
+		GameState.away_report = ""
 	_show_menu(st, notes)
 
 
@@ -202,7 +205,7 @@ func _build_system(id: String, sysd: Dictionary) -> void:
 	var radial := func(th: float) -> Vector3:
 		return Vector3(cos(th), 0.0, sin(th))
 	var sdefs: Array = sysd["stations"]
-	var links: Array = sysd["links"]
+	var links: Array = Galaxy.links(id)
 	var pois := []   # {kind, def/link, side}
 	for i in sdefs.size():
 		pois.append({"kind": "station", "def": sdefs[i], "side": -1.0 if i % 2 == 0 else 1.0})
@@ -388,10 +391,12 @@ func asteroid_push(ship: Node3D) -> void:
 
 # --- Enemies ---------------------------------------------------------------------
 
-func _spawn_raider(pos: Vector3, elite := false) -> void:
+func _spawn_raider(pos: Vector3, elite := false, kind := "") -> void:
 	var r := Raider.new()
 	world_root.add_child(r)
-	r.setup(self, pos, elite)
+	if kind == "":
+		kind = "raider" if elite else Raider.random_kind(Galaxy.SYSTEMS[GameState.system_id]["threat"])
+	r.setup(self, pos, elite, kind)
 
 
 func _spawn_ambient_raiders() -> void:
@@ -419,7 +424,10 @@ func _spawn_mission_wave(m: Dictionary) -> void:
 		centre = (stations[m["site"]] as Station).global_position + (stations[m["site"]] as Station).global_transform.basis.x * 1200.0
 	for i in maxi(n, 0):
 		var p := centre + _side * randf_range(500, 1000) + Vector3(randf_range(-300, 300), randf_range(-150, 150), randf_range(-300, 300))
-		_spawn_raider(p, i == 0)
+		if m.has("wanted") and i == 0:
+			_spawn_raider(p, true, "ace")
+		else:
+			_spawn_raider(p, i == 0)
 	m["spawned"] = true
 
 
@@ -1088,6 +1096,7 @@ func _on_docked(st: Station) -> void:
 	player.autopilot = false
 	road.set_cruise(false)
 	var notes := GameState.turn_in(st.station_id)
+	notes.append_array(GameState.on_home_dock(st.station_id))
 	var trip_note := _trip_summary(st)
 	if trip_note != "":
 		notes.push_front(trip_note)

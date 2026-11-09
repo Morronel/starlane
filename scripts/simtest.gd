@@ -231,6 +231,33 @@ func _road_tests() -> bool:
 	return true
 
 
+## 1.0: every one of the 20 systems builds a clean loop.
+func _all_systems() -> bool:
+	var p: PlayerShip = main.player
+	var cur: String = GameState.system_id
+	var worst_all := 0.0
+	for sid in Galaxy.SYSTEMS:
+		main.load_system(sid)
+		var net: RoadNet = main.net
+		var exits := 0
+		var worst := 0.0
+		for t in net.tracks:
+			if t.role == "exit":
+				exits += 1
+			if t.oneway:
+				for o in p.junction_options(t, 1):
+					if not o.get("stop", false):
+						worst = maxf(worst, absf(o["turn"]))
+		var pois: int = main.stations.size() + main.gates.size() + 1
+		if exits != pois or worst > 15.0:
+			return _failb("%s: %d exits for %d destinations, sharpest turn %d" % [sid, exits, pois, int(worst)])
+		worst_all = maxf(worst_all, worst)
+		await get_tree().process_frame
+	print("all %d systems build clean loops, sharpest junction turn %d deg" % [Galaxy.SYSTEMS.size(), int(worst_all)])
+	main.load_system(cur)
+	return true
+
+
 func _failb(why: String) -> bool:
 	_fail(why)
 	return false
@@ -431,7 +458,7 @@ func _run() -> void:
 	var p: PlayerShip = main.player
 	var hunt := {}
 	for m in GameState.missions:
-		if m["kind"] == "hunt" and m["system"] == "tessaly":
+		if m["kind"] == "hunt" and m["system"] == "tessaly" and not m.has("site"):
 			hunt = m
 	if hunt.is_empty():
 		return _fail("no local hunt offered")
@@ -609,6 +636,97 @@ func _run() -> void:
 		return _fail("could not buy a licence at %d rep" % GameState.get_rep(fac))
 	print("faction: %s %s, licence bought" % [fac, Factions.standing(GameState.get_rep(fac))])
 
+	# --- 0.14 ownership / 0.15 empire
+	GameState.credits += 400000
+	if not Estate.buy(here, "stall"):
+		return _fail("could not buy a market stall")
+	var recs := Estate.recipes_at(here)
+	if not recs.is_empty() and not Estate.buy(here, "factory", recs[0]):
+		return _fail("could not build a factory")
+	var old_ship := GameState.ship
+	if not GameState.buy_ship_keep("otter") or GameState.hangar.size() != 1:
+		return _fail("buy & keep failed")
+	main.player.refresh_ship()
+	if not GameState.switch_ship(int(GameState.hangar[0]["uid"])) or GameState.ship != old_ship:
+		return _fail("switching ships failed")
+	main.player.refresh_ship()
+	var partners: Array = main.menu._route_partners(here)
+	var hire: Dictionary = Estate.pilots_for_hire(here)[0]
+	if partners.is_empty() or not Estate.hire(int(GameState.hangar[0]["uid"]), hire, here, partners[0]):
+		return _fail("could not hire a pilot (partners %s)" % str(partners))
+	var bank0 := GameState.estate_bank
+	for i in 40:
+		Economy.step(20.0)
+	var stall: Dictionary = Estate.props_at(here)[0]
+	print("estate: stall earned %d; %s; fleet: %s" % [int(stall["earned"]), str(Estate.props_at(here).map(func(p): return "%s %s" % [p["kind"], p["status"]])),
+		str(GameState.estate_log.slice(0, 3).map(func(e): return e["text"]))])
+	if int(stall["earned"]) <= 0 or GameState.estate_bank <= bank0:
+		return _fail("estate earned nothing")
+	main.menu._select("estate")
+	await _wait(0.3)
+	main.menu._select("services")
+	await _wait(0.3)
+	# save round trip keeps the estate
+	GameState.save_game("user://simtest_estate.json")
+	var props_n := GameState.props.size()
+	GameState.props = []
+	GameState.hangar = []
+	if not GameState.load_game("user://simtest_estate.json") or GameState.props.size() != props_n or GameState.hangar.size() != 1:
+		return _fail("estate did not survive save/load")
+	print("save v5 round trip: %d props, %d hangar ships; away report: %s" % [GameState.props.size(), GameState.hangar.size(), GameState.away_report])
+	# enemy types and a wanted poster
+	var kinds := []
+	for k in Raider.KINDS:
+		var r := Raider.new()
+		main.world_root.add_child(r)
+		r.setup(main, Vector3(0, 90000, 0), false, k)
+		kinds.append("%s %d hp" % [k, int(r.hp)])
+		r.remove_from_group("enemies")
+		r.queue_free()
+	print("enemy types: ", kinds)
+	var wp := GameState.wanted_poster(here)
+	if wp.is_empty():
+		return _fail("no wanted poster")
+	GameState.accept_poster(wp)
+	print("wanted: %s in %s for %d cr" % [wp["title"], wp["system"], wp["reward"]])
+	GameState.missions.erase(wp)
+	GameState.destination = {}
+
+	# --- 1.0 frontier: the galaxy, the story, a home
+	var open := Galaxy.open_systems()
+	var regions := {}
+	for sid in Galaxy.SYSTEMS:
+		regions[Galaxy.SYSTEMS[sid]["region"]] = true
+		for l in Galaxy.SYSTEMS[sid]["links"]:
+			if not Galaxy.SYSTEMS[l]["links"].has(sid):
+				return _fail("one-way gate link %s -> %s" % [sid, l])
+	for sid in open:
+		if Galaxy.hops("tessaly", sid) > 20:
+			return _fail("%s is unreachable" % sid)
+	print("galaxy: %d systems (%d open) in %d regions, %d stations" % [Galaxy.SYSTEMS.size(), open.size(), regions.size(), Galaxy.all_station_ids().size()])
+	if open.has("quiet_lane") or Galaxy.SYSTEMS.size() < 20:
+		return _fail("the Quiet Lane should start hidden in a 20-system galaxy")
+	GameState.missions = GameState.missions.filter(func(m): return not m.get("story", false))
+	var chapters := []
+	while GameState.story_step < GameState.STORY_DONE:
+		var sm := GameState.story_next()
+		if sm.is_empty():
+			break
+		chapters.append(sm["kind"])
+		sm["state"] = "done"
+		GameState.turn_in(here)
+	print("story: chapters %s, step %d, quiet lane open: %s" % [str(chapters), GameState.story_step, Galaxy.is_open("quiet_lane")])
+	if GameState.story_step != GameState.STORY_DONE or not Galaxy.links("drift").has("quiet_lane"):
+		return _fail("the Lost Lanes story did not finish / open the Quiet Lane")
+	GameState.credits += GameState.HOME_COST + 50000
+	if not GameState.buy_home("rest_tessaly") or not GameState.home_has("observatory"):
+		return _fail("home purchase failed")
+	GameState.hull = 10.0
+	var hn := GameState.on_home_dock("rest_tessaly")
+	if GameState.hull < GameState.max_hull() or hn.size() < 2:
+		return _fail("home dock perks missing")
+	print("home: ", hn)
+
 	# --- workshop + outfit through the menu code paths
 	GameState.parts["scrap"] = 20
 	GameState.parts["circuit"] = 10
@@ -668,6 +786,8 @@ func _run() -> void:
 	if not await _loop_tests():
 		return
 	if not await _road_tests():
+		return
+	if not await _all_systems():
 		return
 
 	# --- boost punch: from cruise, one second of boost nearly doubles the speed

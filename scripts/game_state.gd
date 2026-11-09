@@ -56,8 +56,19 @@ var estate_log: Array = [] # newest first [{t, text}]
 var estate_bank := 0.0     # running total of everything the estate ever earned
 var ranks_seen := {}
 var away_report := ""      # "While you were away" summary after loading
+# 1.0 frontier
+var story_step := 0        # Lost Lanes chain: 0 not started .. STORY_DONE finished
+var home := {}             # {station, upgrades: {garden, observatory, bay}}
+const STORY_UNLOCK := 6    # the Quiet Lane gate opens at this step
+const STORY_DONE := 8
+const HOME_COST := 120000
+const HOME_UPGRADES := {
+	"garden": {"name": "Hydroponic Garden", "price": 25000, "desc": "Grows food and flowers: +40 cr/min, and the place smells nice."},
+	"observatory": {"name": "Observatory", "price": 30000, "desc": "Long-range price scanner: every visit home refreshes prices galaxy-wide."},
+	"bay": {"name": "Pilot Lounge", "price": 35000, "desc": "Your hired pilots rest well here: they keep 5% less of the profit."},
+}
 const PERSIST := ["postcards", "rested_until", "rep", "licences", "hangar", "hangar_counter", "paint", "trinket", "props",
-	"estate_log", "estate_bank", "ranks_seen"]
+	"estate_log", "estate_bank", "ranks_seen", "story_step", "home"]
 
 const PAINTS := [
 	{"name": "Sunset Orange", "color": Color(1.0, 0.55, 0.3)}, {"name": "Lagoon", "color": Color(0.3, 0.85, 0.85)},
@@ -121,6 +132,8 @@ func _new_pilot() -> void:
 	estate_bank = 0.0
 	ranks_seen = {}
 	away_report = ""
+	story_step = 0
+	home = {}
 	if get_node_or_null("/root/Economy"):
 		Economy.reset()
 	hull = max_hull()
@@ -598,7 +611,7 @@ func _offer_missions() -> void:
 			hunts += 1
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	var sys_ids := Galaxy.SYSTEMS.keys()
+	var sys_ids := Galaxy.open_systems()
 	var hunt_systems := {}
 	for m in missions:
 		if m["kind"] == "hunt" and not m.has("site") and m["state"] in ["offered", "active", "done"]:
@@ -698,7 +711,7 @@ func _make_job(here: String, rng: RandomNumberGenerator) -> Dictionary:
 				"desc": "Fly %s to %s (%s) within %d:%02d of departure. Late arrivals pay half." % [who, Galaxy.station_name(to), where, int(allow) / 60, int(allow) % 60],
 				"reward": 600 + h * 750}
 		"salvage":
-			var sid: String = sys if rng.randf() < 0.6 else _pick(rng, Galaxy.SYSTEMS[sys]["links"])
+			var sid: String = sys if rng.randf() < 0.6 else _pick(rng, Galaxy.links(sys))
 			var wd: Dictionary = Galaxy.SYSTEMS[sid].get("wonder", {})
 			var t2: int = Galaxy.SYSTEMS[sid]["threat"]
 			return {"kind": "salvage", "system": sid, "station": "", "faction": "haulers",
@@ -747,6 +760,140 @@ func _make_job(here: String, rng: RandomNumberGenerator) -> Dictionary:
 				"desc": "A small box, oddly heavy, addressed to %s. The sender winks. Something tells me it won't end there." % Galaxy.station_name(to),
 				"reward": 700 + h * 600}
 	return {}
+
+
+const OUTLAWS := ["\"Rusty\" Kalloway", "Mother Vex", "The Velvet Gun", "Sixfinger Ortega", "Lady Cinders", "Baron Nil", "Mad Tamsin", "Quiet Hollis"]
+
+
+## 0.15: the WANTED poster on a bar wall (changes every 30 minutes). {} if
+## you're already hunting this one.
+func wanted_poster(sid: String) -> Dictionary:
+	var r := RandomNumberGenerator.new()
+	var slot := int(Economy.clock / 1800.0)
+	r.seed = hash(sid) + slot * 977
+	var sys := Galaxy.system_of(sid)
+	var cands: Array = Galaxy.SYSTEMS.keys().filter(func(x): return Galaxy.SYSTEMS[x]["threat"] >= 2 and Galaxy.hops(sys, x) <= 2)
+	if cands.is_empty():
+		cands = Galaxy.SYSTEMS.keys().filter(func(x): return Galaxy.SYSTEMS[x]["threat"] >= 2)
+	var target: String = cands[r.randi() % cands.size()]
+	var nm: String = OUTLAWS[r.randi() % OUTLAWS.size()]
+	var key := "%s_%d" % [sid, slot]
+	for m in missions:
+		if m.get("poster", "") == key:
+			return {}
+	var escorts := 2 + int(Galaxy.SYSTEMS[target]["threat"]) - 2
+	return {"kind": "hunt", "state": "offered", "system": target, "station": "", "poster": key, "faction": "navy",
+		"wanted": {"name": nm, "seed": hash(nm) + 5},
+		"count": escorts + 1, "left": escorts + 1,
+		"title": "WANTED: %s" % nm,
+		"desc": "Last seen near the beacon in %s with %d goons. Dead or... well, dead." % [Galaxy.SYSTEMS[target]["name"], escorts],
+		"reward": 5000 + r.randi_range(0, 6) * 1000 + int(Galaxy.SYSTEMS[target]["threat"]) * 1500}
+
+
+func accept_poster(m: Dictionary) -> void:
+	mission_counter += 1
+	m["id"] = mission_counter
+	missions.append(m)
+	accept(m)
+
+
+# --- 1.0 the Lost Lanes ------------------------------------------------------------------
+
+const STORY := [
+	{},
+	{"kind": "survey", "system": "solace", "title": "Lost Lanes I: The Humming Pillars",
+		"desc": "Brother Ambry at the bar swears the Bell Pillars in Solace hum the same note as every beacon. Photograph them so he can listen.", "reward": 2500},
+	{"kind": "salvage", "system": "orchard", "title": "Lost Lanes II: The Ark's Black Box",
+		"desc": "The note matches an old distress call from the Seed Ark in Orchard. Its black box is still out there. Bring it back.", "reward": 4000},
+	{"kind": "courier", "station": "wayf_signal", "title": "Lost Lanes III: The Archivist",
+		"desc": "The black box is in a language nobody speaks. The archivist at Signal Hill (Wayfarer) might. Fly it out to the frontier.", "reward": 6000},
+	{"kind": "survey", "system": "wayfarer", "title": "Lost Lanes IV: The Signpost",
+		"desc": "\"It's a map,\" the archivist whispers. \"Point your camera at the Signpost and let it read the stars.\"", "reward": 6000},
+	{"kind": "salvage", "system": "drift", "title": "Lost Lanes V: The Key in the Ice",
+		"desc": "The Signpost points into the Frozen Wave in The Drift. Something is buried in the ice. Pull it out.", "reward": 9000},
+	{"kind": "courier", "station": "quie_lantern", "title": "Lost Lanes VI: The Quiet Lane",
+		"desc": "The key woke a gate in The Drift that was never on any map. Go through. Dock at the Lantern Gate.", "reward": 12000},
+	{"kind": "survey", "system": "quiet_lane", "title": "Lost Lanes VII: The First Lane",
+		"desc": "Every road began here. Look at it. Really look. Then take the picture.", "reward": 50000},
+]
+
+
+## Start (or continue) the story: the next chapter as a tracked contract.
+func story_next() -> Dictionary:
+	if story_step >= STORY_DONE - 1:
+		return {}
+	for m in missions:
+		if m.get("story", false):
+			return m
+	story_step += 1
+	var d: Dictionary = STORY[story_step].duplicate(true)
+	mission_counter += 1
+	d["id"] = mission_counter
+	d["state"] = "active"
+	d["story"] = true
+	d["faction"] = "lantern"
+	if not d.has("station"):
+		d["station"] = ""
+	missions.append(d)
+	set_destination("mission", d["id"])
+	if story_step == STORY_UNLOCK:
+		message.emit("A gate that was never on any map flickers awake in The Drift...", Color(0.75, 1.0, 0.85))
+	return d
+
+
+func _story_paid(m: Dictionary, out: Array) -> void:
+	if not m.get("story", false):
+		return
+	if story_step >= STORY_DONE - 1:
+		story_step = STORY_DONE
+		add_rep("lantern", 30)
+		if home.is_empty():
+			out.append("THE LOST LANES: you found the first road. The Lantern Order names you Lanefinder. Your home (any rest stop) will come with a free Observatory.")
+		else:
+			home["upgrades"]["observatory"] = true
+			out.append("THE LOST LANES: you found the first road. The Lantern Order names you Lanefinder and fits your home with an Observatory.")
+		return
+	var nxt := story_next()
+	if not nxt.is_empty():
+		out.append("NEXT CHAPTER: %s. %s" % [nxt["title"], nxt["desc"]])
+
+
+# --- 1.0 home ----------------------------------------------------------------------------
+
+func buy_home(sid: String) -> bool:
+	if not home.is_empty() or credits < HOME_COST or not Galaxy.station(sid).get("rest", false):
+		return false
+	credits -= HOME_COST
+	home = {"station": sid, "upgrades": {}}
+	if story_step >= STORY_DONE:
+		home["upgrades"]["observatory"] = true
+	return true
+
+
+func buy_home_upgrade(k: String) -> bool:
+	if home.is_empty() or home["upgrades"].get(k, false) or credits < int(HOME_UPGRADES[k]["price"]):
+		return false
+	credits -= int(HOME_UPGRADES[k]["price"])
+	home["upgrades"][k] = true
+	return true
+
+
+func home_has(k: String) -> bool:
+	return not home.is_empty() and home["upgrades"].get(k, false)
+
+
+## Docking at home: free repairs and jump charges; the observatory refreshes prices.
+func on_home_dock(sid: String) -> Array:
+	if home.is_empty() or home["station"] != sid:
+		return []
+	hull = max_hull()
+	jump_charges = max_jump_charges()
+	var out := ["HOME|Welcome home. Hull patched and jump capacitors topped up, on the house."]
+	if home_has("observatory"):
+		for sys in Galaxy.open_systems():
+			remember_prices(sys)
+		out.append("HOME|The observatory refreshed prices across the galaxy.")
+	return out
 
 
 func missions_for(station: String) -> Array:
@@ -897,6 +1044,7 @@ func turn_in(station: String) -> Array:
 				credits += amount
 				out.append("%s: +%d cr" % [m["title"], amount])
 				add_rep(m.get("faction", Factions.of_station(station)), 3)
+			_story_paid(m, out)
 	missions = missions.filter(func(m): return m["state"] != "paid")
 	for c in chained:
 		missions.append(c)
@@ -1072,6 +1220,7 @@ func _after_load() -> void:
 		rep[f] = int(rep[f])
 	rested_until = float(rested_until)
 	hangar_counter = int(hangar_counter)
+	story_step = int(story_step)
 	paint = int(paint)
 	for h in hangar:
 		h["uid"] = int(h["uid"])

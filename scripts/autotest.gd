@@ -68,7 +68,7 @@ func _run() -> void:
 	main.restart_from_save(true)
 	await _wait(1.5)
 	for m in GameState.missions:
-		if m["kind"] == "hunt" and m["system"] == "tessaly":
+		if m["kind"] == "hunt" and m["system"] == "tessaly" and not m.has("site"):
 			GameState.accept(m)
 	main.menu._select("missions")
 	await _wait(0.8)

@@ -179,7 +179,7 @@ func _process(delta: float) -> void:
 			(sv as SubViewport).render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
 	if not on:
 		return
-	if _built != GameState.ship:
+	if _built != GameState.ship or _trinket_built != GameState.trinket:
 		build(GameState.ship)
 	_animate(delta)
 
@@ -220,6 +220,41 @@ func build(id: String) -> void:
 	add_child(_alarm)
 	_last_cd.clear()
 	_last_hull = GameState.hull
+	_trinket()
+
+
+## 0.14: a little something on the dash.
+var _trinket_node: Node3D
+var _trinket_built := ""
+
+
+func _trinket() -> void:
+	_trinket_built = GameState.trinket
+	if GameState.trinket == "":
+		return
+	var b := MeshBuilder.new()
+	var base := Vector3(0.62, LIP.x + 0.02, LIP.y - 0.04)
+	match GameState.trinket:
+		"bobble":
+			b.cyl("cabin", base, base + Vector3(0, 0.05, 0), 0.025, 0.02, 8, Color(0.9, 0.9, 0.95))
+			b.box("cabin", base + Vector3(0, 0.075, 0), Vector3(0.05, 0.05, 0.045), Color(0.95, 0.95, 1.0))
+			b.box("glow", base + Vector3(0, 0.078, -0.024), Vector3(0.035, 0.022, 0.004), Color(0.3, 0.7, 1.0))
+		"dice":
+			b.box("cabin", base + Vector3(-0.02, 0.0, 0), Vector3(0.035, 0.035, 0.035), Color(1.0, 0.95, 0.95), Basis(Vector3.UP, 0.4))
+			b.box("cabin", base + Vector3(0.025, 0.006, 0.01), Vector3(0.035, 0.035, 0.035), Color(1.0, 0.4, 0.5), Basis(Vector3.UP, -0.3))
+		"plant":
+			b.cyl("cabin", base, base + Vector3(0, 0.035, 0), 0.025, 0.03, 8, Color(0.75, 0.45, 0.3))
+			for k in 5:
+				var a := TAU * k / 5.0
+				b.cyl("cabin", base + Vector3(0, 0.035, 0), base + Vector3(cos(a) * 0.035, 0.09, sin(a) * 0.035), 0.008, 0.002, 4, Color(0.3, 0.85, 0.4))
+		"cat":
+			b.box("cabin", base + Vector3(0, 0.03, 0), Vector3(0.05, 0.06, 0.04), Color(1.0, 1.0, 0.95))
+			b.box("cabin", base + Vector3(0, 0.075, 0), Vector3(0.055, 0.045, 0.04), Color(1.0, 1.0, 0.95))
+			b.box("glow", base + Vector3(0, 0.03, -0.021), Vector3(0.02, 0.02, 0.004), Color(1.0, 0.75, 0.2))
+	var mi := MeshInstance3D.new()
+	mi.mesh = b.build(_materials())
+	add_child(mi)
+	_trinket_node = mi
 
 
 # --- geometry ------------------------------------------------------------------

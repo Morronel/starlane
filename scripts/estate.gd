@@ -12,6 +12,7 @@ const STALL_RATE := 25.0 / 60.0      # cr per second, per level
 const BAR_RATE := 60.0 / 60.0
 const FACTORY_CYCLE := 60.0
 const FACTORY_BATCH := 4
+const INPUT_DISCOUNT := 0.45
 
 ## output -> inputs per unit
 const RECIPES := {
@@ -138,6 +139,14 @@ static func step(dt: float) -> Dictionary:
 					p["t"] -= FACTORY_CYCLE
 					got["factory"] += _factory_cycle(p)
 	got["fleet"] = _fleet_step(dt)
+	if GameState.home_has("garden"):
+		var gcr := 40.0 / 60.0 * dt
+		GameState.home["acc"] = float(GameState.home.get("acc", 0.0)) + gcr
+		got["stall"] += gcr
+		if GameState.home["acc"] >= 1.0:
+			var whole := int(GameState.home["acc"])
+			GameState.home["acc"] -= whole
+			GameState.credits += whole
 	# pay out whole credits
 	var total := 0.0
 	for k in got:
@@ -173,11 +182,13 @@ static func _factory_cycle(p: Dictionary) -> float:
 	if n <= 0:
 		p["status"] = "waiting for " + ", ".join(recipe.keys().filter(func(i): return not linked.has(i)).map(func(i): return Economy.good_name(i)))
 		return 0.0
+	# the factory buys its inputs on a bulk contract (well under the shelf
+	# price) and ships its output out at the going galaxy rate
 	var cost := 0
 	for i in recipe:
 		if not linked.has(i):
-			cost += Economy.buy_price(sid, i) * int(recipe[i]) * n
-	var value := Economy.sell_price(sid, g) * n
+			cost += int(Economy.buy_price(sid, i) * int(recipe[i]) * n * INPUT_DISCOUNT)
+	var value := int(Economy.average_sell(g) * n)
 	if value <= cost:
 		p["status"] = "market flooded, paused"
 		return 0.0
@@ -260,25 +271,34 @@ static func _fleet_leg(sh: Dictionary) -> float:
 	if best == "":
 		log_line("%s found nothing worth hauling from %s." % [nm, Galaxy.station_name(from)])
 		return 0.0
-	var units := mini(cap, Economy.available(from, best))
+	# buy and sell crate by crate while it still pays (a smart pilot doesn't
+	# flood the market)
+	var units := 0
 	var cost := 0
-	for i in units:
-		cost += Economy.buy_price(from, best)
+	var value := 0
+	while units < cap and Economy.available(from, best) > 0:
+		var bp := Economy.buy_price(from, best)
+		var sp := Economy.sell_price(to, best)
+		if sp <= int(bp * 1.03):
+			break
 		Economy.on_bought(from, best, 1)
+		Economy.on_sold(to, best, 1)
+		cost += bp
+		value += sp
+		units += 1
+	if units == 0:
+		log_line("%s found nothing worth hauling from %s." % [nm, Galaxy.station_name(from)])
+		return 0.0
 	# raiders on dangerous roads (skilled pilots and big hulls dodge better)
 	var threat := maxi(Galaxy.SYSTEMS[Galaxy.system_of(from)]["threat"], Galaxy.SYSTEMS[Galaxy.system_of(to)]["threat"])
 	var risk := maxf(0.0, (threat - 1) * 0.08 - skill * 0.02)
 	if randf() < risk:
-		log_line("Raiders jumped %s near %s! Cargo lost (-%d cr)." % [nm, Galaxy.station_name(to), cost])
+		log_line("Raiders jumped %s near %s! Cargo lost (-%s cr)." % [nm, Galaxy.station_name(to), StationMenu._fmt(cost)])
 		sh["earned"] = int(sh.get("earned", 0)) - cost
 		GameState.credits -= mini(cost, GameState.credits)
 		return -float(cost)
-	var value := 0
-	for i in units:
-		value += Economy.sell_price(to, best)
-		Economy.on_sold(to, best, 1)
 	var profit := value - cost
-	var wage := int(maxf(0.0, profit) * (0.2 - skill * 0.02))
+	var wage := int(maxf(0.0, profit) * (0.2 - skill * 0.02 - (0.05 if GameState.home_has("bay") else 0.0)))
 	var net := profit - wage
 	GameState.credits += net
 	sh["earned"] = int(sh.get("earned", 0)) + net
