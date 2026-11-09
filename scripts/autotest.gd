@@ -89,6 +89,9 @@ func _run() -> void:
 	main.menu._select("workshop")
 	await _wait(0.8)
 	await _shot("05_workshop")
+	main.menu._select("bar")
+	await _wait(0.8)
+	await _shot("05b_bar")
 
 	# buy a gunship for the flight shots
 	GameState.ship = "corsair"

@@ -43,19 +43,15 @@ func _ready() -> void:
 
 	_segment(v, "Camera", "first_person", ["3RD PERSON", "1ST PERSON"])
 	_segment(v, "Steering", "invert_pitch", ["DIRECT", "INVERTED"])
-	var hint := Label.new()
-	hint.text = "Direct: drag up to pull the nose up.  Inverted: drag up to dive, like a flight stick."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 15)
-	hint.add_theme_color_override("font_color", UiKit.TEXT_DIM)
-	v.add_child(hint)
+	_segment(v, "Road", "peaceful_trader", ["PIRATE STOPS", "PEACEFUL TRADER"])
 	_slider(v, "Music", "music_volume")
 	_slider(v, "Effects", "sfx_volume")
 
 	_segment(v, "Dev mode", "dev_mode", ["OFF", "ON"])
 
 	var tip := Label.new()
-	tip.text = "Tip: double-tap FIRE to toggle auto-attack."
+	tip.text = "Tip: double-tap FIRE to toggle auto-attack. Steering inverted = drag up to dive."
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.add_theme_font_size_override("font_size", 16)
 	tip.add_theme_color_override("font_color", UiKit.GOLD)
 	v.add_child(tip)

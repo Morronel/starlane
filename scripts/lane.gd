@@ -25,6 +25,12 @@ const TRAFFIC_SIDE := 0.45   # traffic rides at this fraction of the radius, rig
 
 var kind := "road"
 var radius := 130.0
+## 0.10: systems are one-way highway loops with exit and entry ramps.
+## role: "loop" (the highway), "exit" (loop -> station/gate/beacon) or
+## "entry" (back onto the loop). One-way tracks are only ridden with dir +1.
+var role := ""
+var oneway := false
+var exit_no := 0          # exit ramps: the number on the signs
 var node_a := -1
 var node_b := -1
 var curve := Curve3D.new()

@@ -424,6 +424,16 @@ func _draw_system() -> void:
 					UiKit.text_c(self, UiKit.body(600), np + Vector2(0, -20), nd["name"].replace(" Interchange", ""), 13, Color(1.0, 0.86, 0.55, 0.85))
 				"cross":
 					draw_circle(np, 4.5, Color(0.6, 0.9, 1.0))
+				"merge":
+					pass
+				"exit":
+					# numbered exit badge, motorway green, pushed outward off the loop
+					var no: String = nd["name"].replace("Exit ", "")
+					var dir2: Vector2 = (np - to2d.call(Vector3.ZERO)).normalized()
+					var bp: Vector2 = np + dir2 * 16.0
+					draw_rect(Rect2(bp - Vector2(11, 9), Vector2(22, 18)), Color(0.1, 0.45, 0.25, 0.95))
+					draw_rect(Rect2(bp - Vector2(11, 9), Vector2(22, 18)), Color(1, 1, 1, 0.8), false, 1.5)
+					UiKit.text_c(self, UiKit.display(800), bp + Vector2(0, 5), no, 12, Color(1, 1, 1), false)
 				_:
 					draw_arc(np, 7, 0, TAU, 18, Color(0.75, 0.6, 1.0), 2.0, true)
 					if nd["name"] == "Beacon":

@@ -6,6 +6,8 @@ var world: Node
 var parts := {}            # part id -> count
 var blueprint := ""        # blueprint id or ""
 var credits := 0
+var goods := {}
+var mission_id := -1       # 0.13: a black box for a salvage contract            # 0.12: trade goods (drifting cargo pods)
 var life := 120.0
 var drifting := false      # salvage drifts stay until collected
 var _spin := Vector3.ZERO
@@ -19,6 +21,8 @@ func setup(w: Node, pos: Vector3, contents: Dictionary, drift := false) -> void:
 	parts = contents.get("parts", {})
 	blueprint = contents.get("blueprint", "")
 	credits = contents.get("credits", 0)
+	goods = contents.get("goods", {})
+	mission_id = int(contents.get("mission", -1))
 	drifting = drift
 	add_to_group("loot")
 	if _mesh == null:
@@ -78,6 +82,15 @@ func _collect() -> void:
 	var bits := []
 	for k in parts:
 		bits.append("+%d %s" % [parts[k], Items.PARTS[k]["name"]])
+	if mission_id >= 0:
+		GameState.on_salvage(mission_id)
+		bits.append("the black box")
+	for g in goods:
+		var got := GameState.add_cargo_free(g, int(goods[g]))
+		if got > 0:
+			bits.append("+%d %s" % [got, Economy.good_name(g)])
+		elif not bits.has("hold full"):
+			bits.append("hold full")
 	if credits > 0:
 		GameState.credits += credits
 		bits.append("+%d cr" % credits)

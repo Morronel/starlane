@@ -152,6 +152,34 @@ static func icon(ci: CanvasItem, name: String, c: Vector2, s: float, col: Color,
 			ci.draw_polyline(PackedVector2Array([c + Vector2(-s * 0.45, s * 0.4), c + Vector2(-s * 0.45, -s * 0.1), c + Vector2(0, -s * 0.42),
 				c + Vector2(s * 0.45, -s * 0.1), c + Vector2(s * 0.45, s * 0.4)]), col, w, true)
 			ci.draw_polyline(PackedVector2Array([c + Vector2(0, -s * 0.12), c + Vector2(s * 0.2, s * 0.3), c + Vector2(0, s * 0.2), c + Vector2(-s * 0.2, s * 0.3), c + Vector2(0, -s * 0.12)]), col, w, true)
+		"glass":
+			ci.draw_polyline(PackedVector2Array([c + Vector2(-s * 0.3, -s * 0.38), c + Vector2(s * 0.3, -s * 0.38), c + Vector2(0, s * 0.05), c + Vector2(-s * 0.3, -s * 0.38)]), col, w, true)
+			ci.draw_line(c + Vector2(0, s * 0.05), c + Vector2(0, s * 0.38), col, w, true)
+			ci.draw_line(c + Vector2(-s * 0.2, s * 0.38), c + Vector2(s * 0.2, s * 0.38), col, w, true)
+			ci.draw_circle(c + Vector2(s * 0.14, -s * 0.46), s * 0.07, col)
+		"person":
+			ci.draw_arc(c + Vector2(0, -s * 0.2), s * 0.17, 0, TAU, 18, col, w, true)
+			ci.draw_arc(c + Vector2(0, s * 0.42), s * 0.36, PI * 1.12, PI * 1.88, 18, col, w, true)
+		"camera":
+			ci.draw_rect(Rect2(c - Vector2(s * 0.42, s * 0.24), Vector2(s * 0.84, s * 0.56)), col, false, w)
+			ci.draw_arc(c + Vector2(0, s * 0.04), s * 0.17, 0, TAU, 18, col, w, true)
+			ci.draw_line(c + Vector2(-s * 0.16, -s * 0.24), c + Vector2(-s * 0.08, -s * 0.36), col, w, true)
+			ci.draw_line(c + Vector2(-s * 0.08, -s * 0.36), c + Vector2(s * 0.12, -s * 0.36), col, w, true)
+		"house":
+			ci.draw_polyline(PackedVector2Array([c + Vector2(-s * 0.38, s * 0.4), c + Vector2(-s * 0.38, -s * 0.05), c + Vector2(0, -s * 0.4),
+				c + Vector2(s * 0.38, -s * 0.05), c + Vector2(s * 0.38, s * 0.4), c + Vector2(-s * 0.38, s * 0.4)]), col, w, true)
+			ci.draw_rect(Rect2(c + Vector2(-s * 0.1, s * 0.1), Vector2(s * 0.2, s * 0.3)), col, false, w)
+		"star":
+			var pts := PackedVector2Array()
+			for k in 11:
+				var a := -PI * 0.5 + TAU * k / 10.0
+				var rr := s * (0.45 if k % 2 == 0 else 0.2)
+				pts.append(c + Vector2(cos(a), sin(a)) * rr)
+			ci.draw_polyline(pts, col, w, true)
+		"fleet":
+			for k in 3:
+				var o := c + Vector2((k - 1) * s * 0.3, (1 - absi(k - 1)) * -s * 0.18)
+				ci.draw_polyline(PackedVector2Array([o + Vector2(0, -s * 0.2), o + Vector2(s * 0.13, s * 0.16), o + Vector2(-s * 0.13, s * 0.16), o + Vector2(0, -s * 0.2)]), col, w, true)
 		_:
 			ci.draw_circle(c, s * 0.2, col)
 

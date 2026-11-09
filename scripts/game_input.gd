@@ -19,6 +19,9 @@ var auto_fire := false
 signal auto_fire_changed(on: bool)
 signal map_pressed
 signal autopilot_pressed
+signal action2_pressed
+signal photo_pressed
+signal radio_pressed
 
 var _action_queued := false
 var _missile_queued := false
@@ -42,6 +45,9 @@ func _ready() -> void:
 	_bind_keys("map", [KEY_M, KEY_TAB])
 	_bind_keys("missile", [KEY_C, KEY_X])
 	_bind_keys("autopilot", [KEY_P])
+	_bind_keys("action2", [KEY_V])
+	_bind_keys("photo", [KEY_B])
+	_bind_keys("radio", [KEY_N])
 	_bind_joy_button("missile", JOY_BUTTON_RIGHT_STICK)
 	_bind_joy_button("autopilot", JOY_BUTTON_START)
 	_bind_joy_button("auto_fire", JOY_BUTTON_X)
@@ -88,6 +94,12 @@ func _input(event: InputEvent) -> void:
 		_missile_queued = true
 	if event.is_action_pressed("autopilot"):
 		autopilot_pressed.emit()
+	if event.is_action_pressed("action2"):
+		action2_pressed.emit()
+	if event.is_action_pressed("photo"):
+		photo_pressed.emit()
+	if event.is_action_pressed("radio"):
+		radio_pressed.emit()
 
 
 func set_auto_fire(on: bool) -> void:

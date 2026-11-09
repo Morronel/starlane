@@ -18,9 +18,14 @@ func _ready() -> void:
 	GameState.message.connect(push)
 
 
+## 0.11 declutter: at most two toasts, newest on top; a repeat just refreshes.
 func push(text: String, color := Color(0.6, 0.9, 1.0)) -> void:
-	messages.push_front({"text": text, "color": color, "t": 4.5})
-	if messages.size() > 4:
+	for m in messages:
+		if m["text"] == text:
+			m["t"] = 3.5
+			return
+	messages.push_front({"text": text, "color": color, "t": 3.5})
+	if messages.size() > 2:
 		messages.pop_back()
 
 
@@ -64,6 +69,8 @@ func _draw() -> void:
 		return
 
 	_bars(font, p)
+	_news(font)
+	_road(font, p, cam)
 	if Settings.first_person:
 		_glass_hud(p)
 	_destination(font, p, cam)
@@ -372,8 +379,22 @@ func _lane_info(font: Font, p: PlayerShip) -> void:
 	var cx := size.x * 0.5
 	var end_s: float = lane.length if p.lane_dir > 0 else 0.0
 	var where: String = world.net.node_name(world.net.end_node(lane, p.lane_dir))
-	_text(UiKit.display(700, 4), Vector2(cx, y), "GRAND HIGHWAY" if hw else "ROAD", 18, Color(col, 0.9))
-	_text(font, Vector2(cx, y + 28), "%s  %s" % [where, _fmt_dist(absf(end_s - p.lane_s))], 22, Color(1, 1, 1))
+	var title := "GRAND HIGHWAY" if hw else "ROAD"
+	var line := "%s  %s" % [where, _fmt_dist(absf(end_s - p.lane_s))]
+	if lane.oneway:
+		match lane.role:
+			"loop":
+				title = "HIGHWAY LOOP"
+				var nx: Dictionary = world.net.next_exit(lane, p.lane_s)
+				if not nx.is_empty():
+					line = "Next: EXIT %d  %s  ·  %s" % [nx["exit_no"], nx["name"], _fmt_dist(nx["dist"])]
+			"exit":
+				title = "EXIT %d RAMP" % lane.exit_no
+			"entry":
+				title = "ON-RAMP"
+				line = "Merging onto the highway loop  ·  %s" % _fmt_dist(absf(end_s - p.lane_s))
+	_text(UiKit.display(700, 4), Vector2(cx, y), title, 18, Color(col, 0.9))
+	_text(font, Vector2(cx, y + 28), line, 22, Color(1, 1, 1))
 	# speed tier strip: free flight | road | highway, with a pip for our speed
 	var w := 360.0
 	var x0 := cx - w * 0.5
@@ -386,8 +407,35 @@ func _lane_info(font: Font, p: PlayerShip) -> void:
 		draw_line(Vector2(a + 2, yy), Vector2(b - 2, yy), Color(t[2], 0.45), 4.0)
 	var px: float = x0 + w * sqrt(clampf(p.speed, 0.0, vmax) / vmax)
 	draw_colored_polygon(PackedVector2Array([Vector2(px, yy - 4), Vector2(px - 6, yy - 14), Vector2(px + 6, yy - 14)]), Color(1, 0.95, 0.7))
-	_junction(font, p, Vector2(170.0, 200.0))
-	_drift_gauge(p, lane, Vector2(cx, size.y - 130.0))
+	if lane.oneway:
+		_exit_sign(font, p, Vector2(170.0, 214.0))
+	else:
+		_junction(font, p, Vector2(170.0, 200.0))
+		_drift_gauge(p, lane, Vector2(cx, size.y - 130.0))
+
+
+## 0.10: the next exit as a green motorway sign with a countdown in seconds,
+## and whether you'll take it (armed by you or by the GPS) or stay on.
+func _exit_sign(font: Font, p: PlayerShip, c: Vector2) -> void:
+	var j: Dictionary = p.junction
+	if j.is_empty() or j.get("exit", -1) < 0:
+		return
+	var o: Dictionary = j["options"][j["exit"]]
+	var ramp: SpaceLane = o["track"]
+	var armed: bool = j["armed"]
+	var secs: float = j["dist"] / maxf(p.lane_speed, 1.0)
+	var w := 250.0
+	var r := Rect2(c.x - w * 0.5, c.y, w, 96)
+	var green := Color(0.1, 0.42, 0.24)
+	draw_rect(r, Color(green, 0.88 if armed else 0.6))
+	draw_rect(r, Color(1, 1, 1, 0.9 if armed else 0.45), false, 2.0)
+	UiKit.text_c(self, UiKit.display(800, 2), r.position + Vector2(w * 0.5, 24), "EXIT %d" % ramp.exit_no, 20, Color(1, 1, 1), false)
+	UiKit.text_c(self, UiKit.display(600), r.position + Vector2(w * 0.5, 50), o["name"].to_upper(), 14, Color(1, 1, 1, 0.95), false)
+	UiKit.text_c(self, UiKit.display(700), r.position + Vector2(w * 0.5, 78), "%d s" % int(ceil(secs)), 18, Color(1.0, 0.9, 0.55), false)
+	var msg := "TAKING THIS EXIT" if armed else "STAYING ON"
+	UiKit.text_c(self, UiKit.display(700, 2), Vector2(c.x, r.end.y + 20), msg, 13, Color(0.55, 1.0, 0.7) if armed else Color(1, 1, 1, 0.7), false)
+	if not p.autopilot:
+		_text(font, Vector2(c.x, r.end.y + 42), "tap STAY ON" if armed else "tap TAKE EXIT", 12, Color(1, 1, 1, 0.45))
 
 
 ## Upcoming junction as a lane sign: one box per lane, left to right as the
@@ -474,6 +522,77 @@ func _drift_gauge(p: PlayerShip, lane: SpaceLane, c: Vector2) -> void:
 				draw_line(Vector2(x, c.y - r * 0.55), Vector2(x, c.y + r * 0.55), Color(1, 1, 1, 0.35), 1.5)
 	draw_circle(dot, 5.0, Color(0.6, 1.0, 0.75))
 	UiKit.text_c(self, UiKit.display(600), c + Vector2(0, r + 16), "TURN PUSH" if push.length() > 0.2 else "IN THE TUBE", 11, Color(1, 1, 1, 0.55), false)
+
+
+## 0.12: road events - the event card, ion-storm static, the photo flash,
+## the cruise badge and a marker for wherever the event wants you.
+func _road(font: Font, p: PlayerShip, cam: Camera3D) -> void:
+	var road: RoadEvents = world.road
+	if road.storm_t > 0.0:
+		var a := clampf(road.storm_t, 0.0, 1.0)
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0.45, 0.3, 0.9, 0.07 * a))
+		var t := Time.get_ticks_msec() * 0.001
+		for i in 14:
+			var y := fmod(i * 97.0 + t * 380.0 * (1.0 + i % 3), size.y)
+			draw_line(Vector2(0, y), Vector2(size.x, y + sin(t * 3.0 + i) * 6.0), Color(0.75, 0.6, 1.0, 0.06 * a), 2.0)
+		UiKit.text_c(self, UiKit.display(700, 3), Vector2(size.x * 0.5, 146), "ION STORM  ·  LANES AT HALF SPEED  ·  %d s" % int(road.storm_t), 14, Color(0.8, 0.7, 1.0, 0.85), false)
+	if road.photo_flash > 0.0:
+		draw_rect(Rect2(Vector2.ZERO, size), Color(1, 1, 1, road.photo_flash * 0.6))
+		var fr := Rect2(size * 0.5 - Vector2(260, 150), Vector2(520, 300))
+		draw_rect(fr, Color(1, 1, 1, road.photo_flash), false, 3.0)
+	if road.cruise:
+		var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.004)
+		UiKit.text_c(self, UiKit.display(800, 4), Vector2(size.x * 0.5, size.y - 70), "CRUISE  x3", 18, Color(0.55, 1.0, 0.75, 0.6 + pulse * 0.35), false)
+	var mk := road.marker()
+	if not mk.is_empty():
+		_marker(font, cam, mk["pos"], mk["label"], Color(0.5, 1.0, 0.7), p, "dest")
+	var ev: Dictionary = road.ev
+	if ev.has("title") and ev.get("phase", "") in ["offer", "toll", "scan"]:
+		var w := 560.0
+		var r := Rect2(size.x * 0.5 - w * 0.5, 160, w, 86)
+		var col: Color = ev.get("color", Color(0.75, 0.85, 1.0))
+		draw_rect(r, Color(0.02, 0.04, 0.08, 0.78))
+		draw_rect(r, Color(col, 0.7), false, 2.0)
+		draw_rect(Rect2(r.position, Vector2(5, r.size.y)), col)
+		UiKit.text_c(self, UiKit.display(800, 3), Vector2(r.get_center().x, r.position.y + 18), str(ev["title"]), 16, col, false)
+		var body: String = ev.get("text", "")
+		var lines := _wrap(font, body, 15, w - 40)
+		for i in mini(lines.size(), 3):
+			_text(font, Vector2(r.get_center().x, r.position.y + 40 + i * 18), lines[i], 15, Color(1, 1, 1, 0.85))
+		var tleft: float = ev.get("t", 0.0)
+		var tmax := 22.0 if ev["phase"] == "offer" else (12.0 if ev["phase"] == "toll" else 5.0)
+		draw_rect(Rect2(r.position.x + 5, r.end.y - 4, (r.size.x - 5) * clampf(tleft / tmax, 0.0, 1.0), 4), Color(col, 0.8))
+
+
+func _wrap(font: Font, text: String, fs: int, w: float) -> Array:
+	var out := []
+	var cur := ""
+	for word in text.split(" "):
+		var t := word if cur == "" else cur + " " + word
+		if font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > w and cur != "":
+			out.append(cur)
+			cur = word
+		else:
+			cur = t
+	if cur != "":
+		out.append(cur)
+	return out
+
+
+## News ticker: the latest galactic headline for a few seconds, low and small.
+func _news(font: Font) -> void:
+	if Economy.news.is_empty():
+		return
+	var n: Dictionary = Economy.news[0]
+	var age: float = Economy.clock - float(n["time"])
+	if age > 14.0:
+		return
+	var a := clampf(minf(age * 2.0, (14.0 - age) * 0.5), 0.0, 1.0)
+	var txt := "NEWS  ·  " + str(n["text"])
+	var y := size.y - 104.0
+	var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
+	draw_rect(Rect2(size.x * 0.5 - w * 0.5 - 12, y - 14, w + 24, 26), Color(0.02, 0.04, 0.08, 0.55 * a))
+	_text(font, Vector2(size.x * 0.5, y), txt, 15, Color(n.get("color", Color(1, 0.85, 0.5)), 0.9 * a))
 
 
 func _messages(font: Font) -> void:

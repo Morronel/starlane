@@ -15,6 +15,8 @@ var field_center := Vector3.ZERO
 var rocks: Array = []      # {pos, r}
 var world_root: Node3D
 var _side := Vector3.RIGHT
+var _wonder: Node3D
+var site_pos := Vector3.ZERO   # 0.13: a safe spot in front of the wonder (surveys, salvage)
 
 var hud: Hud
 var touch: TouchControls
@@ -24,6 +26,7 @@ var settings_panel: SettingsPanel
 var title: TitleMenu
 var fade: ColorRect
 var sfx: Sfx
+var road: RoadEvents
 
 var _ambient_timer := 0.0
 var _combat_hold := 0.0
@@ -70,8 +73,15 @@ func _ready() -> void:
 	cockpit.world = self
 	camera.add_child(cockpit)
 
+	road = RoadEvents.new()
+	road.main = self
+	add_child(road)
+
 	_build_ui()
 	GameInput.auto_fire_changed.connect(_on_auto_fire)
+	GameInput.radio_pressed.connect(_radio)
+	GameInput.photo_pressed.connect(_photo)
+	GameInput.action2_pressed.connect(_action2)
 	GameInput.map_pressed.connect(_toggle_map)
 	GameInput.autopilot_pressed.connect(toggle_autopilot)
 	GameState.mission_completed.connect(func(): sfx.play("mission_complete", -2.0))
@@ -151,16 +161,18 @@ func load_system(id: String) -> void:
 	add_child(world_root)
 	env.apply_system(sysd["sky"])
 	_build_system(id, sysd)
+	sfx.flight_pitch = 0.94 + fmod(float(sysd["sky"]["seed"]) * 0.37, 0.12)
+	road.reset_system(id, _wonder)
 	player.net = net
 	player.lane = null
 	_ambient_timer = 0.0
 	_spawn_ambient_raiders()
+	_spawn_mission_props()
 
 
 func _build_system(id: String, sysd: Dictionary) -> void:
-	## A graph-shaped system ~70 km across. Four interchanges on a ring plus a
-	## core interchange are joined by grand highways. Stations, stargates, the
-	## beacon and a few crossroads hang off them on plenty of small roads.
+	## A system ~70 km across: one one-way highway loop with an exit ramp and an
+	## entry ramp for every station, stargate and the beacon (see below).
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(id)
 	var sky: Dictionary = sysd["sky"]
@@ -176,117 +188,131 @@ func _build_system(id: String, sysd: Dictionary) -> void:
 	world_root.add_child(net)
 	net.set_palette(sky)
 
-	# interchanges
-	var hubs := []
-	var hub_ang := []
-	for i in 4:
-		var a := rot + i * TAU / 4.0 + rng.randf_range(-0.22, 0.22)
-		hub_ang.append(a)
-		hubs.append(net.add_node(["Alpha", "Beta", "Gamma", "Delta"][i] + " Interchange", at.call(a, R * rng.randf_range(0.88, 1.06), rng.randf_range(-1600.0, 1600.0)), "hub", gold))
-	var core := net.add_node("Core Interchange", at.call(rng.randf() * TAU, R * rng.randf_range(0.05, 0.18), rng.randf_range(-700.0, 700.0)), "hub", gold)
-	var all_hubs := hubs + [core]
-
-	# points of interest: stations in three sectors, the beacon in the fourth,
-	# stargates out beyond the ring
+	# 0.10 "roads for humans": ONE one-way highway loop around the system.
+	# Every station, stargate and the beacon sits on its own exit ramp that
+	# peels off the loop at a gentle angle, and an entry ramp brings you back
+	# on a little further along. Every fork is "stay on" or "take the exit".
+	var wob := rng.randf() * TAU
+	var yph := rng.randf() * TAU
+	var ring := func(th: float) -> Vector3:
+		var rr: float = R * (1.0 + 0.035 * sin(3.0 * th + wob))
+		return Vector3(cos(th) * rr, 1300.0 * sin(2.0 * th + yph), sin(th) * rr)
+	var ring_tan := func(th: float) -> Vector3:
+		return ((ring.call(th + 0.0005) as Vector3) - (ring.call(th - 0.0005) as Vector3)).normalized()
+	var radial := func(th: float) -> Vector3:
+		return Vector3(cos(th), 0.0, sin(th))
 	var sdefs: Array = sysd["stations"]
 	var links: Array = sysd["links"]
-	var pois := []   # {node, pos (of the thing), away}
-	var placed: Array = []
-	for nd in net.nodes:
-		placed.append(nd["pos"])
-	var free_spot := func(ang: float, r0: float, r1: float, y: float) -> Vector3:
-		var best := Vector3.ZERO
-		var best_d := -1.0
-		for k in 12:
-			var cand: Vector3 = at.call(ang + rng.randf_range(-0.3, 0.3), rng.randf_range(r0, r1), y)
-			var md := INF
-			for q in placed:
-				md = minf(md, (q as Vector3).distance_to(cand))
-			if md > best_d:
-				best_d = md
-				best = cand
-			if md > 12000.0:
-				break
-		placed.append(best)
-		return best
-	var station_nodes := []
+	var pois := []   # {kind, def/link, side}
 	for i in sdefs.size():
-		var a: float = rot + (i + 0.5) * TAU / 4.0
-		var tp: Vector3 = free_spot.call(a, R * 0.42, R * 0.7, rng.randf_range(-900.0, 900.0))
-		var outward := Vector3(tp.x, 0, tp.z).normalized()
-		var away := outward.rotated(up, PI * 0.5 * (1.0 if rng.randf() < 0.5 else -1.0)).lerp(outward, 0.3).normalized()
-		var spos := tp + away * 2000.0 + up * rng.randf_range(-200.0, 200.0)
-		var st := _make_station(sdefs[i], spos, (tp - spos).normalized(), i * 0.6)
-		var n := net.add_node(st.display_name, tp, "poi", st.accent)
-		station_nodes.append(n)
-		pois.append(n)
-	# beacon + asteroid field
-	var ba: float = rot + 3.5 * TAU / 4.0
-	var bt: Vector3 = free_spot.call(ba, R * 0.45, R * 0.7, rng.randf_range(-600.0, 600.0))
-	var bout := Vector3(bt.x, 0, bt.z).normalized()
-	beacon_pos = bt + bout * 3000.0 - up * 300.0
-	_side = bout.cross(up).normalized()
-	var beacon_node := net.add_node("Beacon", bt, "poi", Color(0.7, 0.5, 1.0))
-	pois.append(beacon_node)
-	# stargates
-	for i in links.size():
-		var ga: float = hub_ang[i] + 0.4 + rng.randf_range(-0.1, 0.1)
-		var gt: Vector3 = free_spot.call(ga, R * 1.22, R * 1.32, rng.randf_range(-1200.0, 1200.0))
-		var gout := Vector3(gt.x, 0, gt.z).normalized()
-		var gp: Vector3 = gt + gout * 2600.0 + up * 150.0
-		var sg := Stargate.new()
-		sg.link = links[i]
-		sg.display_name = "Gate: " + Galaxy.SYSTEMS[links[i]]["name"]
-		sg.color = (Galaxy.SYSTEMS[links[i]]["sky"]["c"] as Color).lerp(Color(1, 0.9, 0.6), 0.4)
-		world_root.add_child(sg)
-		sg.global_transform = Transform3D(Basis.looking_at((gt - gp).normalized(), up), gp)
-		sg.build()
-		gates[links[i]] = sg
-		pois.append(net.add_node("Gate to " + Galaxy.SYSTEMS[links[i]]["name"], gt, "poi", gold))
-	# crossroads
-	var crosses := []
-	for i in 4:
-		var cp: Vector3 = free_spot.call(rng.randf() * TAU, R * 0.3, R * 0.95, rng.randf_range(-1200.0, 1200.0))
-		crosses.append(net.add_node("Crossroads %s" % ["K", "M", "R", "V"][i], cp, "cross", Color(0.5, 0.85, 1.0)))
-
-	# grand highways: the ring, plus three spokes through the core
-	for i in 4:
-		var a: int = hubs[i]
-		var b: int = hubs[(i + 1) % 4]
-		var mid: Vector3 = ((net.nodes[a]["pos"] as Vector3) + (net.nodes[b]["pos"] as Vector3)) * 0.5
-		var flat := Vector3(mid.x, 0, mid.z)
-		net.add_track(a, b, "highway", rng, flat.normalized() * maxf(0.0, R - flat.length()) * 0.85)
-	var skip := rng.randi() % 4
-	for i in 4:
-		if i != skip:
-			net.add_track(hubs[i], core, "highway", rng)
-
-	# small roads: everything to its nearest interchange and to its neighbours
-	var nearest := func(n: int, pool: Array, k: int) -> Array:
-		var p0: Vector3 = net.nodes[n]["pos"]
-		var cand := pool.filter(func(m): return m != n)
-		cand.sort_custom(func(x, y): return p0.distance_to(net.nodes[x]["pos"]) < p0.distance_to(net.nodes[y]["pos"]))
-		return cand.slice(0, k)
-	var road := func(a: int, b: int) -> void:
-		if a == b or net.has_edge(a, b):
-			return
-		if (net.nodes[a]["pos"] as Vector3).distance_to(net.nodes[b]["pos"]) > 42000.0:
-			return
-		net.add_track(a, b, "road", rng)
-	for n in pois:
-		for h in nearest.call(n, all_hubs, 1):
-			road.call(n, h)
-	for n in station_nodes + [beacon_node]:
-		for m in nearest.call(n, station_nodes + [beacon_node] + crosses, 1):
-			road.call(n, m)
-	for c in crosses:
-		for m in nearest.call(c, pois + crosses + all_hubs, 3):
-			road.call(c, m)
+		pois.append({"kind": "station", "def": sdefs[i], "side": -1.0 if i % 2 == 0 else 1.0})
+	for l in links:
+		pois.append({"kind": "gate", "link": l, "side": 1.0})
+	pois.append({"kind": "beacon", "side": 1.0})
+	# shuffle so gates and stations mix around the loop
+	for i in range(pois.size() - 1, 0, -1):
+		var j := rng.randi() % (i + 1)
+		var tmp = pois[i]
+		pois[i] = pois[j]
+		pois[j] = tmp
+	var N := pois.size()
+	var span := TAU / N
+	var ramp_arc := minf(11000.0, R * span * 0.38)
+	var dth := ramp_arc / R
+	var off := 5200.0
+	var loop_nodes := []   # [{node, th}] in loop order
+	var exit_no := 0
+	var ramps := []        # [{je, jn, poi_node, th, out, dir_in}]
+	for i in N:
+		var th: float = rot + i * span + rng.randf_range(-0.06, 0.06)
+		var poi: Dictionary = pois[i]
+		var out: Vector3 = (radial.call(th) as Vector3) * float(poi["side"])
+		var T: Vector3 = ring_tan.call(th)
+		var P: Vector3 = (ring.call(th) as Vector3) + out * off
+		var dir_in: Vector3 = (T * cos(deg_to_rad(40.0)) + out * sin(deg_to_rad(40.0))).normalized()
+		var name := ""
+		var color := gold
+		match poi["kind"]:
+			"station":
+				var sp: Vector3 = P + dir_in * 2200.0 + up * rng.randf_range(-100.0, 100.0)
+				var st := _make_station(poi["def"], sp, (P - sp).normalized(), i * 0.6)
+				name = st.display_name
+				color = st.accent
+			"gate":
+				var lk: String = poi["link"]
+				var gp: Vector3 = P + dir_in * 2600.0 + up * 150.0
+				var sg := Stargate.new()
+				sg.link = lk
+				sg.display_name = "Gate: " + Galaxy.SYSTEMS[lk]["name"]
+				sg.color = (Galaxy.SYSTEMS[lk]["sky"]["c"] as Color).lerp(Color(1, 0.9, 0.6), 0.4)
+				world_root.add_child(sg)
+				sg.global_transform = Transform3D(Basis.looking_at((P - gp).normalized(), up), gp)
+				sg.build()
+				gates[lk] = sg
+				name = "Gate to " + Galaxy.SYSTEMS[lk]["name"]
+			"beacon":
+				beacon_pos = P + dir_in * 3000.0 - up * 300.0
+				_side = dir_in.cross(up).normalized()
+				name = "Beacon"
+				color = Color(0.7, 0.5, 1.0)
+		exit_no += 1
+		var pn := net.add_node(name, P, "poi", color)
+		var je := net.add_node("Exit %d" % exit_no, ring.call(th - dth), "exit", gold)
+		var jn := net.add_node("%s on-ramp" % name, ring.call(th + dth), "merge", gold)
+		loop_nodes.append({"node": je, "th": th - dth})
+		loop_nodes.append({"node": jn, "th": th + dth})
+		ramps.append({"je": je, "jn": jn, "pn": pn, "th": th, "out": out, "dir_in": dir_in, "no": exit_no})
+	# the loop, segment by segment, sampled straight off the ring curve so it
+	# runs smooth through every junction
+	for i in loop_nodes.size():
+		var a: Dictionary = loop_nodes[i]
+		var b: Dictionary = loop_nodes[(i + 1) % loop_nodes.size()]
+		var th0: float = a["th"]
+		var th1: float = b["th"]
+		while th1 <= th0:
+			th1 += TAU
+		var n := maxi(8, int((th1 - th0) * R / 600.0))
+		var pts := []
+		for k in n + 1:
+			pts.append(ring.call(lerpf(th0, th1, float(k) / n)))
+		net.add_track_pts(a["node"], b["node"], "highway", pts, "loop", true, rng)
+	# ramps: off the loop at 10 degrees, into the destination at 40 degrees;
+	# back on from the destination, merging at 10 degrees
+	var ten := deg_to_rad(10.0)
+	for r in ramps:
+		var th: float = r["th"]
+		var out: Vector3 = r["out"]
+		var pe: Vector3 = ring.call(th - dth)
+		var pnn: Vector3 = ring.call(th + dth)
+		var P: Vector3 = net.nodes[r["pn"]]["pos"]
+		var te: Vector3 = ring_tan.call(th - dth)
+		var oe: Vector3 = (radial.call(th - dth) as Vector3) * signf(out.dot(radial.call(th)))
+		var ta: Vector3 = (te * cos(ten) + oe * sin(ten)).normalized()
+		net.add_track_pts(r["je"], r["pn"], "road", net.ramp_pts(pe, P, ta, r["dir_in"]), "exit", true, rng, r["no"])
+		var tn: Vector3 = ring_tan.call(th + dth)
+		var on: Vector3 = (radial.call(th + dth) as Vector3) * signf(out.dot(radial.call(th)))
+		var T: Vector3 = ring_tan.call(th)
+		var t0: Vector3 = (T * cos(ten) - out * sin(ten)).normalized()
+		var t1: Vector3 = (tn * cos(ten) - on * sin(ten)).normalized()
+		net.add_track_pts(r["pn"], r["jn"], "road", net.ramp_pts(P, pnn, t0, t1), "entry", true, rng)
 	net.build_nodes(sky)
+
+	# 0.12: the system's wonder, just outside the loop between two exits
+	_wonder = null
+	if sysd.has("wonder"):
+		var thw := rot + span * 0.5
+		var wpos: Vector3 = (ring.call(thw) as Vector3) + (radial.call(thw) as Vector3) * 11000.0 + up * 1800.0
+		var sk: Dictionary = sysd["sky"]
+		_wonder = Wonders.build(sysd["wonder"]["kind"], sk["c"], sk["b"], hash(id) + 7)
+		world_root.add_child(_wonder)
+		_wonder.global_position = wpos
+		_wonder.rotate_y(rng.randf() * TAU)
+		site_pos = wpos + ((ring.call(thw) as Vector3) - wpos).normalized() * 5000.0
 
 	var bea := MeshInstance3D.new()
 	bea.mesh = Models.beacon(Color(0.7, 0.5, 1.0))
 	world_root.add_child(bea)
+	var bout := _side.cross(up).normalized() * -1.0
 	bea.global_position = beacon_pos - bout * 200.0
 	field_center = beacon_pos + bout * 2200.0
 	_build_asteroids(field_center, rng)
@@ -374,10 +400,25 @@ func _spawn_ambient_raiders() -> void:
 		_spawn_raider(beacon_pos + _side * (600.0 + i * 140.0) + Vector3(0, 60 * i, 0), threat >= 3 and i == 0)
 
 
+## 0.13: black boxes for salvage contracts in this system.
+func _spawn_mission_props() -> void:
+	for m in GameState.missions:
+		if m["kind"] == "salvage" and m["state"] == "active" and m["system"] == GameState.system_id:
+			var have := false
+			for l in get_tree().get_nodes_in_group("loot"):
+				if l.mission_id == m["id"]:
+					have = true
+			if not have:
+				spawn_loot(site_pos + Vector3(randf_range(-200, 200), randf_range(-80, 80), randf_range(-200, 200)), {"mission": m["id"], "parts": {"scrap": 2}}, true)
+
+
 func _spawn_mission_wave(m: Dictionary) -> void:
 	var n: int = m["left"] - get_tree().get_nodes_in_group("enemies").size()
+	var centre := beacon_pos
+	if m.has("site") and stations.has(m["site"]):
+		centre = (stations[m["site"]] as Station).global_position + (stations[m["site"]] as Station).global_transform.basis.x * 1200.0
 	for i in maxi(n, 0):
-		var p := beacon_pos + _side * randf_range(500, 1000) + Vector3(randf_range(-300, 300), randf_range(-150, 150), randf_range(-300, 300))
+		var p := centre + _side * randf_range(500, 1000) + Vector3(randf_range(-300, 300), randf_range(-150, 150), randf_range(-300, 300))
 		_spawn_raider(p, i == 0)
 	m["spawned"] = true
 
@@ -427,6 +468,9 @@ func _build_ui() -> void:
 	touch.map_tapped.connect(_toggle_map)
 	touch.autopilot_tapped.connect(toggle_autopilot)
 	touch.settings_tapped.connect(_open_settings)
+	touch.radio_tapped.connect(_radio)
+	touch.photo_tapped.connect(_photo)
+	touch.action2_tapped.connect(_action2)
 	menu = StationMenu.new()
 	menu.world = self
 	menu.visible = false
@@ -511,6 +555,8 @@ func sfx_boom(pos: Vector3, big := false) -> void:
 
 func _process(delta: float) -> void:
 	env.set_dust_velocity(player.velocity)
+	if not GameState.trip.is_empty() and (player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE):
+		GameState.trip["dist"] = float(GameState.trip.get("dist", 0.0)) + player.speed * delta
 	var flying := player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE
 	sfx.engine(player.speed / player.top_speed(), flying or player.mode == PlayerShip.Mode.JUMPING)
 	# combat music while raiders are actually fighting us (with a hold so it doesn't flap)
@@ -524,7 +570,7 @@ func _process(delta: float) -> void:
 				break
 	if player.mode == PlayerShip.Mode.DOCKED:
 		_combat_hold = 0.0
-		sfx.music("station")
+		sfx.music("bar" if menu.visible and menu._tab == "bar" else "station")
 	else:
 		sfx.music("combat" if _combat_hold > 0.0 else "flight")
 	touch.visible = flying and not star_map.visible and not settings_panel.visible
@@ -551,7 +597,17 @@ func _process(delta: float) -> void:
 	var label := ""
 	var col := Color(0.3, 0.9, 1.0)
 	var act := ""
-	if player.mode == PlayerShip.Mode.LANE:
+	if player.mode == PlayerShip.Mode.LANE and player.exit_ahead() and not player.autopilot:
+		var j: Dictionary = player.junction
+		var eo: Dictionary = j["options"][j["exit"]]
+		if j["armed"]:
+			label = "STAY ON"
+			col = Color(1.0, 0.85, 0.5)
+		else:
+			label = "TAKE EXIT %d" % eo["track"].exit_no
+			col = Color(0.45, 1.0, 0.6)
+		act = "arm"
+	elif player.mode == PlayerShip.Mode.LANE:
 		var near: Dictionary = player.lane.nearest_entry(player.global_position)
 		if not near.is_empty() and near["dist"] < 900.0:
 			label = "EXIT: " + near["name"]
@@ -574,6 +630,13 @@ func _process(delta: float) -> void:
 			label = "ENTER " + SpaceLane.KINDS[player.can_enter_lane()["track"].kind]["label"]
 			act = "lane"
 	touch.action_label = label
+	var off: Dictionary = road.offer() if flying else {}
+	touch.action2_label = off.get("label", "")
+	touch.action2_color = off.get("color", Color(0.55, 1.0, 0.75))
+	if not GameInput.using_touch and touch.action2_label != "":
+		touch.action2_label += "  [V]"
+	touch.photo_ready = flying and not road.photo_target().is_empty()
+	touch.radio_name = Sfx.RADIO[clampi(Settings.radio, 0, Sfx.RADIO.size() - 1)]["name"]
 	touch.autopilot_on = player.autopilot
 	touch.autopilot_ready = not GameState.destination.is_empty()
 	var sec := GameState.installed("secondary")
@@ -583,6 +646,9 @@ func _process(delta: float) -> void:
 		touch.action_label = label + "  [T]"
 	if GameInput.consume_action():
 		match act:
+			"arm":
+				player.toggle_exit()
+				sfx.play("ui_tab", -3.0, 1.2 if player.junction.get("armed", false) else 0.9)
 			"exit":
 				player.exit_lane()
 			"dock":
@@ -643,6 +709,8 @@ func dest_target() -> Dictionary:
 	if info["station"] != "" and stations.has(info["station"]):
 		var st: Station = stations[info["station"]]
 		return {"pos": st.global_position, "goal": _station_goal(st), "station": st, "label": info["label"], "final": info}
+	if info.get("site", "") == "wonder":
+		return {"pos": site_pos, "goal": site_pos, "site": true, "label": info["label"], "final": info}
 	return {"pos": beacon_pos, "goal": beacon_pos, "beacon": true, "label": info["label"], "final": info}
 
 
@@ -691,6 +759,9 @@ func _autopilot_plan() -> void:
 			return
 		if t.has("beacon") and player.global_position.distance_to(beacon_pos) < 900.0:
 			player.set_autopilot(false, "Arrived at the beacon. Weapons free!")
+			return
+		if t.has("site") and player.global_position.distance_to(site_pos) < 700.0:
+			player.set_autopilot(false, "Arrived at %s. Look around!" % t["label"])
 			return
 		# ride the network when it's faster: replan twice a second
 		_ap_plan_t -= get_physics_process_delta_time()
@@ -748,6 +819,7 @@ func _update_gps(delta: float) -> void:
 	var t := dest_target() if flying and not _jumping else {}
 	if t.is_empty():
 		gps = {}
+		player.gps_exit = -1
 		return
 	_gps_t -= delta
 	var lane_mode := player.mode == PlayerShip.Mode.LANE
@@ -770,6 +842,11 @@ func _update_gps(delta: float) -> void:
 					rides = []
 			gps = {"rides": rides}
 	gps["target"] = t
+	player.gps_exit = -1
+	for r in gps.get("rides", []):
+		if (r["track"] as SpaceLane).role == "exit":
+			player.gps_exit = (r["track"] as SpaceLane).node_a
+			break
 	# chime a few seconds before a junction where the route turns
 	if lane_mode:
 		var g := gps_info()
@@ -811,6 +888,8 @@ func gps_info() -> Dictionary:
 		out.merge({"icon": "exit", "text": "Leave the %s now" % lane.kind, "dist": 0.0, "then": "fly to " + label}, true)
 		return out
 	var r0: Dictionary = rides[0]
+	if lane.oneway:
+		return _gps_loop(out, rides, label, t)
 	if rides.size() == 1 and absf(float(r0["exit_s"]) - endp) > 5.0:
 		out.merge({"icon": "exit", "text": "Leave the %s" % lane.kind, "dist": maxf(0.0, (float(r0["exit_s"]) - player.lane_s) * dir), "then": "fly to " + label}, true)
 		return out
@@ -847,6 +926,48 @@ func gps_info() -> Dictionary:
 		lanes_word = {"straight": "Carry on", "left": "Bear left", "right": "Bear right"}[out["icon"]]
 	out["text"] = "%s: %s to %s" % [lanes_word, kind_word, o["name"]]
 	out["then"] = _gps_step_text(rides, 2, label)
+	return out
+
+
+## GPS on the loop network: "stay on, your exit is Exit 3" / "take Exit 3" /
+## "stop at Cinder Post". Only ever one simple instruction.
+func _gps_loop(out: Dictionary, rides: Array, label: String, t: Dictionary) -> Dictionary:
+	var lane := player.lane
+	var r0: Dictionary = rides[0]
+	var endp: float = lane.length
+	if lane.role == "exit":
+		if rides.size() == 1 and absf(float(r0["exit_s"]) - endp) > 5.0:
+			out.merge({"icon": "exit", "text": "Leave the ramp", "dist": maxf(0.0, float(r0["exit_s"]) - player.lane_s), "then": "fly to " + label}, true)
+		else:
+			out.merge({"icon": "stop", "text": "Ramp ends at " + net.node_name(lane.node_b), "dist": endp - player.lane_s,
+				"then": "dock at " + label if t.get("station") != null else "fly to " + label}, true)
+		return out
+	# distance along the route to the exit ramp we want
+	var d := 0.0
+	var ramp: SpaceLane = null
+	for i in rides.size():
+		var tr: SpaceLane = rides[i]["track"]
+		if tr.role == "exit":
+			ramp = tr
+			break
+		d += (tr.length - player.lane_s) if i == 0 else tr.length
+	if ramp == null:
+		if rides.size() >= 1 and absf(float(rides[-1]["exit_s"]) - (rides[-1]["track"] as SpaceLane).length) > 5.0:
+			out.merge({"icon": "exit", "text": "Drop out of the highway", "dist": maxf(0.0, d - ((rides[-1]["track"] as SpaceLane).length - float(rides[-1]["exit_s"]))), "then": "fly to " + label}, true)
+		else:
+			out.merge({"icon": "exit", "text": "Leave the %s now" % lane.kind, "dist": 0.0, "then": "fly to " + label}, true)
+		return out
+	var nx := net.next_exit(lane, player.lane_s)
+	var j: Dictionary = player.junction
+	var dest := net.node_name(ramp.node_b)
+	if not nx.is_empty() and nx["node"] == ramp.node_a:
+		var armed: bool = j.get("armed", false) and j.get("node", -1) == ramp.node_a
+		out.merge({"icon": "exit" if armed else "right", "text": "Take EXIT %d: %s" % [ramp.exit_no, dest], "dist": d,
+			"then": ("armed, the ramp is yours" if armed else "tap TAKE EXIT") if not player.autopilot else "then dock"}, true)
+		out["junction"] = ramp.node_a
+	else:
+		out.merge({"icon": "straight", "text": "Stay on the highway: EXIT %d for %s" % [ramp.exit_no, dest], "dist": d,
+			"then": "next exit is %d" % nx["exit_no"] if not nx.is_empty() else ""}, true)
 	return out
 
 
@@ -888,6 +1009,7 @@ func _on_jump_requested(dest: String) -> void:
 	if gate == null:
 		return
 	_jumping = true
+	road.set_cruise(false)
 	if player.mode == PlayerShip.Mode.LANE:
 		player.exit_lane()
 	player.mode = PlayerShip.Mode.JUMPING
@@ -938,6 +1060,23 @@ func _jump_fly(t: float) -> void:
 	player.speed = 80.0 + t * 900.0
 
 
+# --- 0.12 radio, photos, road offers ------------------------------------------------
+
+func _radio() -> void:
+	GameState.message.emit(sfx.next_radio(), Color(0.85, 0.75, 1.0))
+
+
+func _photo() -> void:
+	if player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE:
+		road.take_photo()
+
+
+func _action2() -> void:
+	if player.mode == PlayerShip.Mode.FLIGHT or player.mode == PlayerShip.Mode.LANE:
+		if not road.offer().is_empty():
+			road.take_offer()
+
+
 func _on_auto_fire(on: bool) -> void:
 	sfx.play("autofire_on" if on else "autofire_off", -2.0)
 	GameState.message.emit("Auto-attack " + ("ON" if on else "OFF"), Color(1.0, 0.85, 0.4))
@@ -947,7 +1086,12 @@ func _on_auto_fire(on: bool) -> void:
 
 func _on_docked(st: Station) -> void:
 	player.autopilot = false
+	road.set_cruise(false)
 	var notes := GameState.turn_in(st.station_id)
+	var trip_note := _trip_summary(st)
+	if trip_note != "":
+		notes.push_front(trip_note)
+	GameState.remember_prices(GameState.system_id)
 	sfx.play("dock_clamp", -2.0)
 	if not notes.is_empty():
 		sfx.play("mission_complete", -3.0)
@@ -956,6 +1100,31 @@ func _on_docked(st: Station) -> void:
 	tw.tween_property(fade, "color:a", 1.0, 0.5)
 	tw.tween_callback(func(): _show_menu(st, notes))
 	tw.tween_property(fade, "color:a", 0.0, 0.6)
+
+
+## Trip log on arrival: how far, how long, what the hold is worth here.
+func _trip_summary(st: Station) -> String:
+	var tr: Dictionary = GameState.trip
+	if tr.is_empty():
+		return ""
+	GameState.trip = {}
+	var secs := Economy.clock - float(tr.get("t0", Economy.clock))
+	var km := float(tr.get("dist", 0.0)) / 1000.0
+	if km < 1.0:
+		return ""
+	GameState.lifetime["km"] = float(GameState.lifetime.get("km", 0.0)) + km
+	var line := "%.1f km in %d:%02d" % [km, int(secs) / 60, int(secs) % 60]
+	var paid := GameState.cargo_paid()
+	if paid > 0:
+		var worth := GameState.hold_value_at(st.station_id)
+		var gain := worth - paid
+		var per_min := gain / maxf(secs / 60.0, 0.5)
+		line += "  ·  hold paid %s cr, worth %s cr here: %s%s cr if you sell (%s%s cr/min)" % [StationMenu._fmt(paid), StationMenu._fmt(worth),
+			"+" if gain >= 0 else "-", StationMenu._fmt(absi(gain)), "+" if gain >= 0 else "-", StationMenu._fmt(absi(int(per_min)))]
+	var earned := GameState.credits - int(tr.get("cr0", GameState.credits))
+	if earned != 0:
+		line += "  ·  credits since launch %s%s" % ["+" if earned > 0 else "-", StationMenu._fmt(absi(earned))]
+	return "TRIP|" + line
 
 
 func _show_menu(st: Station, notes: Array) -> void:
@@ -977,6 +1146,8 @@ func _launch() -> void:
 	var tw := create_tween()
 	fade.color = Color(0, 0, 0, 1)
 	player.undock(st)
+	GameState.start_trip()
+	_spawn_mission_props()
 	camera.snap()
 	tw.tween_property(fade, "color:a", 0.0, 0.7)
 	GameState.message.emit("Cleared for departure. Fly safe.", Color(0.6, 1.0, 0.75))
@@ -986,6 +1157,7 @@ func _on_player_died() -> void:
 	if _respawning:
 		return
 	_respawning = true
+	road.set_cruise(false)
 	combat.explosion(player.global_position, 1.6)
 	GameState.message.emit("SHIP DESTROYED", Color(1, 0.3, 0.25))
 	await get_tree().create_timer(2.5).timeout

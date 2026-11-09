@@ -111,6 +111,38 @@ func add_track(a: int, b: int, kind: String, rng: RandomNumberGenerator, bulge :
 	nodes[b]["links"].append(a)
 
 
+## Lay a track straight from a list of points (0.10 loop network): no fan
+## layout, no wiggles. The caller is responsible for smooth joins.
+func add_track_pts(a: int, b: int, kind: String, pts: Array, role: String, oneway: bool, rng: RandomNumberGenerator, exit_no := 0) -> SpaceLane:
+	nodes[a]["links"].append(b)
+	nodes[b]["links"].append(a)
+	var t := SpaceLane.new()
+	t.kind = kind
+	t.role = role
+	t.oneway = oneway
+	t.exit_no = exit_no
+	t.node_a = a
+	t.node_b = b
+	t.name = "%s_%s_%d_%d" % [kind, role, a, b]
+	add_child(t)
+	t.build(pts, [
+		{"name": nodes[a]["name"], "pos": nodes[a]["pos"], "color": nodes[a]["color"]},
+		{"name": nodes[b]["name"], "pos": nodes[b]["pos"], "color": nodes[b]["color"]},
+	], mats, _traffic_meshes, rng.randi())
+	nodes[a]["edges"].append(t)
+	nodes[b]["edges"].append(t)
+	tracks.append(t)
+	return t
+
+
+## Hermite points from pa to pb leaving along ta and arriving along tb
+## (unit vectors, direction of travel), with tangent length k * distance.
+func ramp_pts(pa: Vector3, pb: Vector3, ta: Vector3, tb: Vector3, k := 1.0, step := 300.0) -> Array:
+	var L := pa.distance_to(pb)
+	var n := maxi(12, int(L / step))
+	return _hermite_pts(pa, pb, ta * L * k, tb * L * k, n, Vector3.ZERO, Vector3.ZERO, 0.0, 1.0, 1.0, Vector3.ZERO, 0.0, 0.0)
+
+
 ## Every junction gets an axis. Its tracks leave along that axis, half one way
 ## and half the other, fanned out within +-FAN_DEG in the horizontal plane and
 ## ordered as they really lie. Riding in from one side you can carry on to any
@@ -281,8 +313,9 @@ static func _kmax(pts: Array) -> float:
 ## single ring at crossroads.
 func build_nodes(sky: Dictionary) -> void:
 	_build_tracks()
+	_build_signs()
 	for nd in nodes:
-		if nd["kind"] == "poi":
+		if nd["kind"] != "hub" and nd["kind"] != "cross":
 			continue
 		var hub: bool = nd["kind"] == "hub"
 		var holder := Node3D.new()
@@ -298,6 +331,60 @@ func build_nodes(sky: Dictionary) -> void:
 		var spin := SpinNode.new()
 		spin.rate = 0.05 if hub else 0.12
 		holder.add_child(spin)
+
+
+## Overhead exit signs on the loop, motorway style: one a few seconds before
+## each exit and one at the split, plus a "STAY ON" sign over the loop after it.
+func _build_signs() -> void:
+	var font: Font = UiKit.display(800)
+	for t in tracks:
+		if t.role != "exit":
+			continue
+		var n: int = t.node_a
+		var into: SpaceLane = null
+		for o in nodes[n]["edges"]:
+			if o.role == "loop" and o.node_b == n:
+				into = o
+		if into == null:
+			continue
+		var dest: String = nodes[t.node_b]["name"].to_upper()
+		for back in [into.length * 0.55, 1800.0]:
+			var s := maxf(into.length - back, 0.0)
+			_sign(into, s, "EXIT %d\n%s" % [t.exit_no, dest], Color(0.45, 1.0, 0.6), font)
+		_sign(t, minf(1600.0, t.length * 0.3), "%s\nEXIT %d" % [dest, t.exit_no], Color(0.45, 1.0, 0.6), font, 0.6)
+
+
+func _sign(t: SpaceLane, s: float, text: String, col: Color, font: Font, scale := 1.0) -> void:
+	var f := t.frame(s)
+	var holder := Node3D.new()
+	add_child(holder)
+	holder.global_transform = Transform3D(Basis.looking_at(f["fwd"], f["up"]), f["origin"] + f["up"] * t.radius * 0.5)
+	# backing board
+	var board := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(t.radius * 1.25, t.radius * 0.42) * scale
+	board.mesh = q
+	var bm := StandardMaterial3D.new()
+	bm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bm.albedo_color = Color(0.02, 0.12, 0.07, 0.75)
+	bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	board.material_override = bm
+	board.position = Vector3(0, 0, 2.0)
+	holder.add_child(board)
+	var lab := Label3D.new()
+	lab.text = text
+	lab.font = font
+	lab.font_size = 96
+	lab.pixel_size = t.radius * 0.0016 * scale
+	lab.modulate = col
+	lab.outline_size = 0
+	lab.shaded = false
+	lab.double_sided = false
+	lab.no_depth_test = false
+	lab.line_spacing = -8.0
+	lab.position = Vector3(0, 0, 4.0)
+	holder.add_child(lab)
 
 
 class SpinNode extends Node:
@@ -320,6 +407,9 @@ func closest(pos: Vector3, max_dist := INF, kind := "") -> Dictionary:
 		if max_dist < INF and not t.aabb.grow(max_dist).has_point(pos):
 			continue
 		var c: Dictionary = t.closest(pos)
+		# a one-way track can't be joined right at its end (or ridden backwards)
+		if t.oneway and max_dist < INF and t.length - float(c["s"]) < 1500.0:
+			continue
 		# prefer highways where tubes overlap: they're the bigger, faster ride
 		var d: float = c["dist"] - (t.radius if max_dist < INF else 0.0)
 		if d < best_d:
@@ -367,7 +457,12 @@ func allowed(t: SpaceLane, dir: int) -> Array:
 	var right := arrive.cross(Vector3.UP).normalized()
 	var out := []
 	var gentlest := {}
+	if nodes[end_node(t, dir)]["kind"] == "poi" and t.oneway:
+		_allowed_cache[key] = out
+		return out
 	for b in branches(t, dir):
+		if b["track"].oneway and b["dir"] < 0:
+			continue
 		var o: Vector3 = b["out"]
 		var ang := rad_to_deg(arrive.angle_to(o))
 		b["turn"] = ang * (1.0 if o.dot(right) > 0.0 else -1.0)
@@ -421,11 +516,14 @@ func plan(from: Vector3, goal: Vector3, top: float, riding: SpaceLane = null, s 
 			var c := t.closest(from)
 			var v := _ap_speed(t)
 			var fly: float = c["dist"] / top + MERGE_PENALTY
-			_seed(dist, prev, ride_of, [t, -1], fly + c["s"] / v, {"track": t, "dir": -1, "enter_s": c["s"], "exit_s": 0.0})
+			if not t.oneway:
+				_seed(dist, prev, ride_of, [t, -1], fly + c["s"] / v, {"track": t, "dir": -1, "enter_s": c["s"], "exit_s": 0.0})
 			_seed(dist, prev, ride_of, [t, 1], fly + (t.length - c["s"]) / v, {"track": t, "dir": 1, "enter_s": c["s"], "exit_s": t.length})
 			# ride part of this one track and drop out near the goal
 			var g: Dictionary = goals[ti]
 			var cost: float = fly + absf(g["s"] - c["s"]) / v + g["dist"] / top
+			if t.oneway and g["s"] < c["s"]:
+				cost = INF
 			if cost < best["cost"]:
 				best = {"cost": cost, "rides": [{"track": t, "dir": 1 if g["s"] >= c["s"] else -1, "enter_s": c["s"], "exit_s": g["s"]}]}
 	else:
@@ -490,3 +588,37 @@ func _unwind(prev: Dictionary, ride_of: Dictionary, key: Array) -> Array:
 		k = prev.get(k, null)
 		guard += 1
 	return out
+
+
+# --- 0.10 loop helpers ---------------------------------------------------------------
+
+## The next exit along the loop from (track, s) riding dir +1:
+## {node, name, exit_no, ramp, dist} or {} (also from an entry ramp).
+func next_exit(t: SpaceLane, s: float) -> Dictionary:
+	var d := t.length - s
+	var cur := t
+	for guard in 64:
+		var n := cur.node_b
+		if nodes[n]["kind"] == "exit":
+			for o in nodes[n]["edges"]:
+				if o.role == "exit" and o.node_a == n:
+					return {"node": n, "name": nodes[o.node_b]["name"], "exit_no": o.exit_no, "ramp": o, "dist": d}
+		if nodes[n]["kind"] == "poi":
+			return {}
+		var nxt: SpaceLane = null
+		for o in nodes[n]["edges"]:
+			if o.role == "loop" and o.node_a == n:
+				nxt = o
+		if nxt == null:
+			return {}
+		d += nxt.length
+		cur = nxt
+	return {}
+
+
+## Exit ramp that leads to a POI node, or null.
+func exit_ramp_to(poi: int) -> SpaceLane:
+	for t in tracks:
+		if t.role == "exit" and t.node_b == poi:
+			return t
+	return null

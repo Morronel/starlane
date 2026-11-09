@@ -189,7 +189,7 @@ func build(id: String) -> void:
 		c.queue_free()
 	_viewports.clear()
 	_built = id
-	_cfg = config(id)
+	_cfg = config(Items.SHIPS.get(id, {}).get("cockpit", id))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(id)
 	var b := MeshBuilder.new()

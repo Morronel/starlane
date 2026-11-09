@@ -26,9 +26,11 @@ var _preview_ship: Node3D
 const TABS := [
 	["missions", "CONTRACTS", "target"],
 	["market", "MARKET", "crate"],
+	["bar", "BAR", "glass"],
 	["hangar", "HANGAR", "hangar"],
 	["outfit", "OUTFIT", "bolt"],
 	["workshop", "WORKSHOP", "blueprint"],
+	["estate", "ESTATE", "house"],
 	["services", "SERVICES", "wrench"],
 ]
 
@@ -47,7 +49,7 @@ func _ready() -> void:
 	# left rail
 	var rail := VBoxContainer.new()
 	rail.name = "Rail"
-	rail.add_theme_constant_override("separation", 7)
+	rail.add_theme_constant_override("separation", 5)
 	add_child(rail)
 	for t in TABS:
 		var b := _rail_button(t[1], t[2])
@@ -112,7 +114,7 @@ func _layout() -> void:
 func _rail_button(label: String, icon_name: String) -> Button:
 	var b := Button.new()
 	b.toggle_mode = true
-	b.custom_minimum_size = Vector2(250, 58)
+	b.custom_minimum_size = Vector2(250, 48)
 	b.text = ""
 	b.add_theme_stylebox_override("normal", UiKit.box(Color(0.04, 0.08, 0.14, 0.85), Color(UiKit.ACCENT, 0.2), 6))
 	b.add_theme_stylebox_override("hover", UiKit.box(Color(0.06, 0.12, 0.2, 0.9), Color(UiKit.ACCENT, 0.5), 6))
@@ -257,12 +259,16 @@ func _build_tab() -> void:
 			_build_missions()
 		"market":
 			_build_market()
+		"bar":
+			_build_bar()
 		"hangar":
 			_build_hangar()
 		"outfit":
 			_build_outfit()
 		"workshop":
 			_build_workshop()
+		"estate":
+			_build_estate()
 		"services":
 			_build_services()
 
@@ -398,9 +404,20 @@ func _deny(b: Control) -> void:
 
 # --- tabs ------------------------------------------------------------------------
 
+const MISSION_LOOK := {
+	"hunt": ["target", Color(1.0, 0.5, 0.4)], "courier": ["crate", Color(1.0, 0.86, 0.45)], "chain": ["crate", Color(1.0, 0.7, 0.9)],
+	"supply": ["crate", Color(1.0, 0.7, 0.35)], "passenger": ["person", Color(0.5, 0.9, 1.0)], "salvage": ["wrench", Color(0.6, 1.0, 0.7)],
+	"survey": ["camera", Color(0.75, 1.0, 0.85)], "smuggle": ["crate", Color(1.0, 0.4, 0.5)], "race": ["bolt", Color(1.0, 0.95, 0.4)],
+}
+
+
 func _build_missions() -> void:
 	_heading("CONTRACTS", "Take work, earn credits. Hunts pay on completion at any station.")
 	for n in _notes:
+		if n.begins_with("TRIP|"):
+			var tc := _card(UiKit.ACCENT)
+			_text_block(tc[1], "TRIP LOG", n.substr(5), UiKit.ACCENT)
+			continue
 		var c := _card(UiKit.GOLD)
 		_text_block(c[1], "PAYMENT RECEIVED" if n.ends_with(" cr") else "STATION NOTICE", n, UiKit.GOLD)
 	_notes = []
@@ -410,13 +427,15 @@ func _build_missions() -> void:
 		_text_block(c[1], "No contracts right now", "Check back later.")
 	for m in list:
 		var hunt: bool = m["kind"] == "hunt"
-		var col := Color(1.0, 0.5, 0.4) if hunt else UiKit.GOLD
+		var look: Array = MISSION_LOOK.get(m["kind"], ["crate", UiKit.GOLD])
+		var col: Color = look[1]
 		var c := _card(col)
 		var h: HBoxContainer = c[1]
 		var ic := Control.new()
 		ic.custom_minimum_size = Vector2(48, 48)
 		ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		ic.draw.connect(func(): UiKit.icon(ic, "target" if hunt else "crate", Vector2(24, 24), 40, col, 2.2))
+		var icon_name: String = look[0]
+		ic.draw.connect(func(): UiKit.icon(ic, icon_name, Vector2(24, 24), 40, col, 2.2))
 		h.add_child(ic)
 		var state: String = m["state"]
 		var title: String = m["title"]
@@ -438,8 +457,385 @@ func _build_missions() -> void:
 			_btn(h, "TRACKING" if tracked else "TRACK", _do_track.bind(m), tracked, 150)
 
 
+# --- 0.14 / 0.15 estate: property, factories, your hangar and fleet -----------------
+
+func _build_estate() -> void:
+	var sid := station.station_id
+	_heading("ESTATE", "Things you own keep earning while you fly, and while you're away (up to two hours).")
+	# summary
+	var cs := _card(UiKit.GOLD)
+	var rate := 0.0
+	for p in GameState.props:
+		if p["kind"] == "stall":
+			rate += Estate.STALL_RATE * 60.0 * p["level"]
+		elif p["kind"] == "bar":
+			rate += Estate.BAR_RATE * 60.0 * p["level"]
+	var flying := GameState.hangar.filter(func(h): return not h.get("pilot", {}).is_empty()).size()
+	var sv := _text_block(cs[1], "LIFETIME ESTATE EARNINGS  %s CR" % _fmt(int(GameState.estate_bank)),
+		"%d properties  ·  rent about %d cr/min  ·  %d ship%s hauling for you" % [GameState.props.size(), int(rate), flying, "" if flying == 1 else "s"], UiKit.GOLD)
+	sv.add_child(_label("Ranks:  Trader %s  ·  Combat %s  ·  Explorer %s" % [GameState.rank_name("trader"), GameState.rank_name("combat"), GameState.rank_name("explorer")], 16, UiKit.TEXT_DIM, UiKit.body(600)))
+	# property at this station
+	_content.add_child(_label("PROPERTY AT %s" % station.display_name.to_upper(), 18, UiKit.ACCENT, UiKit.display(700, 2)))
+	_prop_card(sid, "stall", "", "MARKET STALL", "A little stand on the concourse. Rent: %d cr/min per level." % int(Estate.STALL_RATE * 60.0), Estate.STALL_COST, true)
+	var fac := Factions.of_station(sid)
+	var bar_ok := GameState.get_rep(fac) >= 8
+	_prop_card(sid, "bar", "", "YOUR OWN BAR", "Buy the place. Takings: %d cr/min per level.%s" % [int(Estate.BAR_RATE * 60.0), "" if bar_ok else "  Needs Friendly standing with " + Factions.LIST[fac]["name"] + "."], Estate.BAR_COST, bar_ok)
+	for g in Estate.recipes_at(sid):
+		var rec: Dictionary = Estate.RECIPES[g]
+		var ins := []
+		for i in rec:
+			ins.append("%d %s" % [rec[i], Economy.good_name(i)])
+		_prop_card(sid, "factory", g, "%s FACTORY" % Economy.good_name(g).to_upper(),
+			"Turns %s from this station's shelves into 1 %s. %d per minute per level. Feed it by selling inputs here." % [" + ".join(ins), Economy.good_name(g), Estate.FACTORY_BATCH], Estate.factory_cost(g), true)
+	# hangar & fleet
+	_content.add_child(_label("YOUR HANGAR & FLEET", 18, UiKit.ACCENT, UiKit.display(700, 2)))
+	if GameState.hangar.is_empty():
+		var ce := _card(UiKit.TEXT_DIM)
+		_text_block(ce[1], "No spare ships yet", "Use BUY & KEEP at a shipyard: your old ship waits here, and a hired pilot can fly it on a trade route.")
+	var hires := Estate.pilots_for_hire(sid)
+	for hs in GameState.hangar:
+		var info: Dictionary = Items.SHIPS[hs["ship"]]
+		var pl: Dictionary = hs.get("pilot", {})
+		var cc := _card(UiKit.GOOD if not pl.is_empty() else station.accent)
+		var ch: HBoxContainer = cc[1]
+		if not pl.is_empty():
+			ch.add_child(Portraits.control(int(pl["seed"]), Vector2(72, 72)))
+			var route: Array = hs["route"]
+			var left := maxf(0.0, float(hs["t"]) - Economy.clock)
+			_text_block(ch, "%s  ·  %s (%s)" % [info["name"].to_upper(), pl["name"], Estate.PILOT_SKILLS[int(pl["skill"])]],
+				"%s ⇄ %s  ·  next stop in %d:%02d  ·  earned %s cr" % [Galaxy.station_name(route[0]), Galaxy.station_name(route[1]), int(left) / 60, int(left) % 60, _fmt(int(hs.get("earned", 0)))])
+			_btn(ch, "RECALL", _do_recall.bind(int(hs["uid"])), false, 120)
+			continue
+		var here: bool = hs["station"] == sid
+		_text_block(ch, "%s  ·  %s" % [info["name"].to_upper(), info["role"]], "Parked at %s. Cargo %d." % [Galaxy.station_name(hs["station"]), info["cargo"]])
+		if not here:
+			continue
+		_btn(ch, "FLY IT", _do_switch.bind(int(hs["uid"])), false, 110)
+		_btn(ch, "SELL\n%s" % _fmt(Items.ship_trade_in(hs["ship"])), _do_sell_ship.bind(int(hs["uid"])), false, 110).custom_minimum_size.y = 60
+		# hire a pilot for a route from here
+		var partners := _route_partners(sid)
+		for pi in hires.size():
+			var p: Dictionary = hires[pi]
+			if partners.is_empty():
+				break
+			var hc := _card(Color(0.6, 1.0, 0.75))
+			hc[1].add_child(Portraits.control(int(p["seed"]), Vector2(64, 64)))
+			_text_block(hc[1], "HIRE %s  ·  %s  ·  fee %s cr" % [p["name"].to_upper(), Estate.PILOT_SKILLS[int(p["skill"])], _fmt(p["fee"])],
+				"\"%s\" Takes %d%% of profits. Route: here ⇄ %s." % [p["blurb"], int((0.2 - int(p["skill"]) * 0.02) * 100), Galaxy.station_name(partners[pi % partners.size()])])
+			_btn(hc[1], "HIRE", _do_hire.bind(int(hs["uid"]), p, partners[pi % partners.size()]), GameState.credits < int(p["fee"]), 110)
+	# elsewhere
+	var others := GameState.props.filter(func(p): return p["station"] != sid)
+	if not others.is_empty():
+		_content.add_child(_label("ELSEWHERE", 18, UiKit.ACCENT, UiKit.display(700, 2)))
+		for p in others:
+			var co := _card(UiKit.TEXT_DIM)
+			_text_block(co[1], "%s  ·  %s  ·  LEVEL %d" % [Estate.kind_name(p["kind"], p.get("good", "")).to_upper(), Galaxy.station_name(p["station"]), p["level"]],
+				"Earned %s cr%s" % [_fmt(int(p["earned"])), ("  ·  " + str(p["status"])) if str(p.get("status", "")) != "" else ""])
+	# ledger
+	if not GameState.estate_log.is_empty():
+		var cl := _card(UiKit.TEXT_DIM)
+		var lv := _text_block(cl[1], "LEDGER", "")
+		for e in GameState.estate_log.slice(0, 8):
+			lv.add_child(_label("· " + str(e["text"]), 15, UiKit.TEXT_DIM, UiKit.body(500), true))
+
+
+func _prop_card(sid: String, kind: String, good: String, title: String, body: String, cost: int, allowed: bool) -> void:
+	var owned := {}
+	for p in GameState.props:
+		if p["station"] == sid and p["kind"] == kind and p.get("good", "") == good:
+			owned = p
+	var c := _card(UiKit.GOOD if not owned.is_empty() else Color(0.75, 0.8, 0.9))
+	var h: HBoxContainer = c[1]
+	var ic := Control.new()
+	ic.custom_minimum_size = Vector2(48, 48)
+	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var icn := "glass" if kind == "bar" else ("crate" if kind == "stall" else "gear")
+	ic.draw.connect(func(): UiKit.icon(ic, icn, Vector2(24, 24), 40, UiKit.GOLD, 2.2))
+	h.add_child(ic)
+	if owned.is_empty():
+		_text_block(h, title, body)
+		_btn(h, "BUY\n%s" % _fmt(cost), _do_buy_prop.bind(kind, good), not allowed or GameState.credits < cost, 150).custom_minimum_size.y = 60
+	else:
+		var st := str(owned.get("status", ""))
+		_text_block(h, "%s  ·  LEVEL %d" % [title, owned["level"]], "Earned %s cr so far.%s" % [_fmt(int(owned["earned"])), ("  " + st.capitalize() + ".") if st != "" else ""], UiKit.GOOD)
+		if int(owned["level"]) < 3:
+			var uc := Estate.upgrade_cost(owned)
+			_btn(h, "UPGRADE\n%s" % _fmt(uc), _do_upgrade_prop.bind(owned), GameState.credits < uc, 150).custom_minimum_size.y = 60
+
+
+## Stations worth running a trade route to from here (best margins first).
+func _route_partners(sid: String) -> Array:
+	var scored := []
+	for other in Galaxy.all_station_ids():
+		if other == sid or Galaxy.hops(Galaxy.system_of(sid), Galaxy.system_of(other)) > 1:
+			continue
+		var best := 0
+		for g in Economy.traded(sid):
+			if Economy.trades_here(other, g):
+				best = maxi(best, Economy.sell_price(other, g) - Economy.buy_price(sid, g))
+				best = maxi(best, Economy.sell_price(sid, g) - Economy.buy_price(other, g))
+		if best > 0:
+			scored.append([best, other])
+	scored.sort_custom(func(a, b): return a[0] > b[0])
+	return scored.slice(0, 2).map(func(x): return x[1])
+
+
+func _do_buy_prop(b: Control, kind: String, good: String) -> void:
+	var before := GameState.credits
+	if Estate.buy(station.station_id, kind, good):
+		_money(GameState.credits - before)
+		world.sfx.play("kaching", -3.0)
+		_sparkle(b, UiKit.GOLD)
+		GameState.message.emit("You own a %s now. It starts earning right away." % Estate.kind_name(kind, good), UiKit.GOLD)
+		GameState.save_game()
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_upgrade_prop(b: Control, p: Dictionary) -> void:
+	var before := GameState.credits
+	if Estate.upgrade(p):
+		_money(GameState.credits - before)
+		world.sfx.ui("upgrade")
+		_sparkle(b, UiKit.GOOD)
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_switch(b: Control, uid: int) -> void:
+	if GameState.switch_ship(uid):
+		world.player.refresh_ship()
+		world.sfx.play("dock_clamp", -6.0, 0.8)
+		_sparkle(b, UiKit.GOOD)
+		GameState.message.emit("Switched ships. Your %s is parked here." % Items.SHIPS[GameState.hangar_ship(uid)["ship"]]["name"], UiKit.GOOD)
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_sell_ship(b: Button, uid: int) -> void:
+	if not _confirmed(b, "sellship_%d" % uid, "TAP TO CONFIRM"):
+		return
+	var v := GameState.sell_stored_ship(uid)
+	if v > 0:
+		_money(v)
+		world.sfx.ui("buy")
+		_rebuild_keep_scroll.call_deferred()
+
+
+func _do_hire(b: Control, uid: int, pilot: Dictionary, to: String) -> void:
+	var before := GameState.credits
+	if Estate.hire(uid, pilot, station.station_id, to):
+		_money(GameState.credits - before)
+		world.sfx.play("cheers", -6.0)
+		_sparkle(b, UiKit.GOOD)
+		GameState.message.emit("%s is on the road. Reports will come in as they trade." % pilot["name"], UiKit.GOOD)
+		GameState.save_game()
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_recall(b: Control, uid: int) -> void:
+	var hs := GameState.hangar_ship(uid)
+	if hs.is_empty():
+		return
+	var route: Array = hs["route"]
+	Estate.dismiss(uid, route[int(hs["leg"]) % 2])
+	world.sfx.ui("click")
+	_sparkle(b, UiKit.ACCENT)
+	_rebuild_keep_scroll.call_deferred()
+
+
+# --- 0.13 the bar (and the rest-stop diner) ----------------------------------------
+
+var _dice := {}            # last Orbit roll shown in the bar
+var _heard := {}           # station -> {regular index: true} rumours paid for this visit
+var _round_at := {}        # station -> Economy.clock of the last round you bought
+
+
+func _build_bar() -> void:
+	var sid := station.station_id
+	var def := Galaxy.station(sid)
+	var rest: bool = def.get("rest", false)
+	var fac := Factions.of_station(sid)
+	var fd: Dictionary = Factions.LIST[fac]
+	var bt := Bar.bartender(sid)
+	_heading("THE DINER" if rest else "THE BAR", "%s pours the drinks. %s regulars here." % [bt["name"], fd["name"]])
+	# bartender
+	var c := _card(station.accent)
+	var h: HBoxContainer = c[1]
+	h.add_child(Portraits.control(bt["seed"], Vector2(104, 104)))
+	var v := _text_block(h, bt["name"].to_upper() + "  ·  BEHIND THE BAR", "\"%s\"" % bt["line"], station.accent)
+	var crowd := 9
+	var round_cost := 25 * crowd
+	var bought := Economy.clock - float(_round_at.get(sid, -9999.0)) < 600.0
+	var rb := _btn(h, "ROUND ON ME\n%d cr" % round_cost if not bought else "CHEERS!", _do_round.bind(round_cost), bought or GameState.credits < round_cost, 170)
+	rb.custom_minimum_size.y = 64
+	# rest stop extras
+	if rest:
+		var cd := _card(Color(1.0, 0.8, 0.5))
+		var rested := GameState.is_rested()
+		_text_block(cd[1], "COFFEE & PIE  ·  60 CR", "Fresh pot, fresh pie. +15% lane speed for the next 10 minutes." + ("  (You're buzzing already.)" if rested else ""), Color(1.0, 0.8, 0.5))
+		_btn(cd[1], "ORDER", _do_coffee, GameState.credits < 60, 140)
+		var cn := _card(Color(0.7, 0.75, 1.0))
+		_text_block(cn[1], "TAKE A NAP", "Sleep in a booth for 15 minutes. Markets move, news happens, your hull gets patched a little.", Color(0.7, 0.75, 1.0))
+		_btn(cn[1], "SNOOZE", _do_nap, false, 140)
+	# regulars and their rumours
+	var free_talk: bool = bought or GameState.has_licence("lantern")
+	var regs := Bar.regulars(sid)
+	for i in regs.size():
+		var rg: Dictionary = regs[i]
+		var rm := Bar.rumour(sid, i)
+		var heard: bool = free_talk or not rm["valuable"] or _heard.get(sid, {}).get(i, false)
+		var cr := _card(Color(0.75, 0.85, 1.0) if not rm["valuable"] else UiKit.GOLD)
+		cr[1].add_child(Portraits.control(rg["seed"], Vector2(84, 84)))
+		var body: String = "\"%s\"" % rm["text"] if heard else "Leans in like they know something worth hearing... for a tip."
+		_text_block(cr[1], "%s  ·  %s" % [rg["name"].to_upper(), rg["role"]], body, Color(1, 1, 1))
+		if not heard:
+			_btn(cr[1], "TIP 120 cr", _do_tip.bind(i), GameState.credits < 120, 150)
+	# Orbit dice
+	var cdice := _card(Color(1.0, 0.6, 0.9))
+	var dv := _text_block(cdice[1], "ORBIT DICE", "Two dice each. Doubles beat any plain roll, then highest wins. Doubles pay double.", Color(1.0, 0.6, 0.9))
+	if not _dice.is_empty():
+		dv.add_child(_label("You %d + %d   ·   House %d + %d   →   %s  %s" % [_dice["you"][0], _dice["you"][1], _dice["house"][0], _dice["house"][1],
+			_dice["line"], ("+%d cr" % _dice["win"]) if _dice["win"] > 0 else ("%d cr" % _dice["win"] if _dice["win"] < 0 else "")], 17,
+			UiKit.GOOD if _dice["win"] > 0 else (UiKit.BAD if _dice["win"] < 0 else UiKit.TEXT_DIM), UiKit.display(700), true))
+	for bet in [50, 250, 1000]:
+		_btn(cdice[1], "BET %d" % bet, _do_dice.bind(bet), GameState.credits < bet, 110)
+	# jukebox
+	var cj := _card(Color(0.85, 0.75, 1.0))
+	_text_block(cj[1], "JUKEBOX", "Pick the station your radio plays on the road: %s." % Sfx.RADIO[Settings.radio]["name"], Color(0.85, 0.75, 1.0))
+	for k in Sfx.RADIO.size():
+		var b := _btn(cj[1], (Sfx.RADIO[k]["name"] as String).to_upper().replace("STARLANE ", "").replace("RADIO ", ""), _do_jukebox.bind(k), Settings.radio == k, 120)
+		b.custom_minimum_size.x = 110
+	# faction & licence
+	var rep := GameState.get_rep(fac)
+	var cf := _card(fd["color"])
+	var fv := _text_block(cf[1], "%s  ·  %s (%d)" % [fd["name"].to_upper(), Factions.standing(rep).to_upper(), rep], fd["desc"], fd["color"])
+	fv.add_child(_label("%s: %s" % [fd["licence"], fd["perk"]], 16, UiKit.TEXT_DIM, UiKit.body(600), true))
+	if GameState.has_licence(fac):
+		_chip(cf[1], "LICENSED", UiKit.GOOD, true)
+	else:
+		var can := rep >= Factions.LICENCE_REP and GameState.credits >= int(fd["licence_cost"])
+		_btn(cf[1], "LICENCE\n%s cr" % _fmt(fd["licence_cost"]) if rep >= Factions.LICENCE_REP else "NEEDS %d REP" % Factions.LICENCE_REP, _do_licence.bind(fac), not can, 170).custom_minimum_size.y = 64
+	if rest:
+		_postcard_album()
+
+
+func _postcard_album() -> void:
+	var ca := _card(Color(1.0, 0.85, 0.5))
+	var v := _text_block(ca[1], "POSTCARD RACK  ·  %d / %d WONDERS" % [GameState.postcards.keys().filter(func(k): return k.begins_with("wonder_")).size(), Galaxy.SYSTEMS.size()],
+		"Snap wonders and comets with PHOTO on the road. The Tourism Board pays for every first shot.", Color(1.0, 0.85, 0.5))
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 10)
+	flow.add_theme_constant_override("v_separation", 10)
+	v.add_child(flow)
+	for id in GameState.postcards:
+		var pc: Dictionary = GameState.postcards[id]
+		var box := VBoxContainer.new()
+		var path := "user://postcards/%s.png" % id
+		if FileAccess.file_exists(path):
+			var img := Image.load_from_file(ProjectSettings.globalize_path(path))
+			if img:
+				var tr := TextureRect.new()
+				tr.texture = ImageTexture.create_from_image(img)
+				tr.custom_minimum_size = Vector2(192, 108)
+				tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+				box.add_child(tr)
+		box.add_child(_label(str(pc.get("name", id)), 14, Color(1, 1, 1), UiKit.display(700)))
+		flow.add_child(box)
+
+
+func _do_round(b: Control, cost: int) -> void:
+	if GameState.credits < cost:
+		_deny(b)
+		return
+	GameState.credits -= cost
+	_money(-cost)
+	_round_at[station.station_id] = Economy.clock
+	GameState.add_rep(Factions.of_station(station.station_id), 2)
+	world.sfx.play("cheers", -3.0)
+	_sparkle(b, UiKit.GOLD)
+	GameState.message.emit("The whole bar cheers. Everyone's suddenly very chatty.", UiKit.GOLD)
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_tip(b: Control, i: int) -> void:
+	if GameState.credits < 120:
+		_deny(b)
+		return
+	GameState.credits -= 120
+	_money(-120)
+	if not _heard.has(station.station_id):
+		_heard[station.station_id] = {}
+	_heard[station.station_id][i] = true
+	world.sfx.ui("click")
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_dice(b: Control, bet: int) -> void:
+	if GameState.credits < bet:
+		_deny(b)
+		return
+	_dice = Bar.orbit(bet)
+	GameState.credits += int(_dice["win"])
+	_money(int(_dice["win"]))
+	world.sfx.play("dice", -2.0)
+	if int(_dice["win"]) > 0:
+		world.sfx.play("kaching", -6.0)
+		_sparkle(b, UiKit.GOOD)
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_jukebox(_b: Control, k: int) -> void:
+	Settings.set_value("radio", k)
+	world.sfx.play("radio_tune", -6.0)
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_licence(b: Control, fac: String) -> void:
+	var before := GameState.credits
+	if GameState.buy_licence(fac):
+		_money(GameState.credits - before)
+		world.sfx.ui("upgrade")
+		_sparkle(b, UiKit.GOOD)
+		GameState.message.emit("%s acquired: %s" % [Factions.LIST[fac]["licence"], Factions.LIST[fac]["perk"]], UiKit.GOOD)
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
+
+
+func _do_coffee(b: Control) -> void:
+	if GameState.credits < 60:
+		_deny(b)
+		return
+	GameState.credits -= 60
+	_money(-60)
+	GameState.rested_until = Economy.clock + 600.0
+	world.sfx.play("ui_buy", -4.0, 1.2)
+	_sparkle(b, Color(1.0, 0.8, 0.5))
+	GameState.message.emit("Best pie this side of the Rift. You feel quick.", Color(1.0, 0.8, 0.5))
+	_rebuild_keep_scroll.call_deferred()
+
+
+func _do_nap(b: Control) -> void:
+	for i in 45:
+		Economy.step(20.0)
+	GameState.hull = minf(GameState.max_hull(), GameState.hull + GameState.max_hull() * 0.15)
+	world.sfx.play("ui_open", -6.0, 0.7)
+	_sparkle(b, Color(0.7, 0.75, 1.0))
+	GameState.message.emit("You wake up with a booth-shaped crease on your face. 15 minutes passed.", Color(0.7, 0.75, 1.0))
+	_rebuild_keep_scroll.call_deferred()
+
+
 func _build_market() -> void:
-	_heading("MARKET", "Buy low, sell where it's needed. Prices differ in every station.")
+	var here := station.station_id
+	var head := "Prices follow stock: what's piled up is cheap, what's short is dear. Your own trades move them too."
+	_heading("MARKET", head)
 	# cargo hold bar
 	var c := _card(UiKit.ACCENT)
 	var bar := Control.new()
@@ -448,57 +844,139 @@ func _build_market() -> void:
 	bar.draw.connect(func():
 		var w := bar.size.x
 		var cap := GameState.cargo_capacity()
-		bar.draw_string(UiKit.display(700), Vector2(0, 16), "CARGO HOLD  %d / %d" % [GameState.cargo_used(), cap], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1, 0.85))
+		var paid := GameState.cargo_paid()
+		var worth := GameState.hold_value_at(here)
+		var line := "CARGO HOLD  %d / %d" % [GameState.cargo_used(), cap]
+		if paid > 0:
+			line += "     paid %s cr  ·  worth here %s cr" % [_fmt(paid), _fmt(worth)]
+		bar.draw_string(UiKit.display(700), Vector2(0, 16), line, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1, 0.85))
 		var x := 0.0
 		bar.draw_rect(Rect2(0, 26, w, 14), Color(1, 1, 1, 0.06))
-		for id in Galaxy.COMMODITIES:
+		for id in GameState.cargo:
 			var n: int = GameState.cargo.get(id, 0)
 			if n > 0:
 				var seg := w * n / cap
-				bar.draw_rect(Rect2(x, 26, seg - 2, 14), Galaxy.COMMODITIES[id]["color"])
-				x += seg
-		for i in range(1, cap):
-			bar.draw_line(Vector2(w * i / cap, 26), Vector2(w * i / cap, 40), Color(0, 0, 0, 0.35), 1.0))
+				bar.draw_rect(Rect2(x, 26, seg - 2, 14), Economy.GOODS[id]["color"])
+				x += seg)
 	c[1].add_child(bar)
 
-	for id in Galaxy.COMMODITIES:
-		var info: Dictionary = Galaxy.COMMODITIES[id]
-		var price := GameState.price(station.station_id, id)
-		var held: int = GameState.cargo.get(id, 0)
-		var avg := 0.0
-		var cnt := 0
-		for sid in Galaxy.SYSTEMS:
-			for st in Galaxy.SYSTEMS[sid]["stations"]:
-				avg += float(st["prices"][id])
-				cnt += 1
-		avg /= cnt
-		var mult: float = Galaxy.station(station.station_id)["prices"][id]
-		var tag := "FAIR"
-		var tag_col := UiKit.TEXT_DIM
-		if mult < avg * 0.88:
-			tag = "CHEAP HERE"
-			tag_col = UiKit.GOOD
-		elif mult > avg * 1.1:
-			tag = "IN DEMAND"
-			tag_col = UiKit.GOLD
-		var row := _card(info["color"])
-		var h: HBoxContainer = row[1]
-		var v := VBoxContainer.new()
-		v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		v.add_theme_constant_override("separation", 2)
-		var top := HBoxContainer.new()
-		top.add_child(_label(info["name"].to_upper(), 19, Color(1, 1, 1), UiKit.display(700)))
-		top.add_child(_label("  " + tag, 14, tag_col, UiKit.display(700)))
-		v.add_child(top)
-		v.add_child(_label("%s CR / unit     In hold: %d" % [_fmt(price), held], 17, UiKit.GOLD, UiKit.body(600)))
-		var best := Galaxy.best_sell(id)
-		if best["station"] != station.station_id:
-			v.add_child(_label("Best market: %s, %s (%s cr)" % [best["name"], best["system"], _fmt(int(round(info["base"] * best["mult"])))], 14, UiKit.TEXT_DIM, UiKit.body(500)))
-		h.add_child(v)
-		_btn(h, "BUY 1", func(b): _buy(b, id, 1), false, 104)
-		_btn(h, "BUY 5", func(b): _buy(b, id, 5), false, 104)
-		_btn(h, "MAX", func(b): _buy(b, id, 999), false, 92)
-		_btn(h, "SELL ALL", func(b): _sell(b, id), held == 0, 130)
+	_trade_computer(here)
+	_news_card()
+
+	# goods traded here: what they make first, then what they want, then the rest
+	var goods: Array = Economy.traded(here)
+	var order := {"makes": 0, "needs": 1, "deals": 2}
+	goods.sort_custom(func(x, y): return order[Economy.role(here, x)] < order[Economy.role(here, y)])
+	for id in goods:
+		_good_row(here, id)
+	# cargo they don't trade here
+	var stuck := []
+	for id in GameState.cargo:
+		if not Economy.trades_here(here, id):
+			stuck.append(id)
+	if not stuck.is_empty():
+		var sc := _card(UiKit.TEXT_DIM)
+		var names := ", ".join(stuck.map(func(g): return "%d %s" % [GameState.cargo[g], Economy.good_name(g)]))
+		var illegal := stuck.any(func(g): return Economy.GOODS[g].get("illegal", false))
+		_text_block(sc[1], "NOT TRADED HERE", "%s. Sell it somewhere that wants it.%s" % [names, " Contraband only sells outside the core systems." if illegal else ""])
+
+
+func _good_row(here: String, id: String) -> void:
+	var info: Dictionary = Economy.GOODS[id]
+	var sp := Economy.sell_price(here, id)
+	var bp := Economy.buy_price(here, id)
+	var held: int = GameState.cargo.get(id, 0)
+	var role := Economy.role(here, id)
+	var tag: String = {"makes": "MADE HERE", "needs": "WANTED HERE", "deals": "TRADED"}[role]
+	var tag_col: Color = {"makes": UiKit.GOOD, "needs": UiKit.GOLD, "deals": UiKit.TEXT_DIM}[role]
+	var ev := Economy.event_at(here, id)
+	var row := _card(info["color"])
+	var h: HBoxContainer = row[1]
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 2)
+	var top := HBoxContainer.new()
+	top.add_child(_label(info["name"].to_upper(), 19, Color(1, 1, 1), UiKit.display(700)))
+	top.add_child(_label("  " + tag, 14, tag_col, UiKit.display(700)))
+	if info.get("illegal", false):
+		top.add_child(_label("  CONTRABAND", 14, UiKit.BAD, UiKit.display(700)))
+	if not ev.is_empty():
+		top.add_child(_label("  " + str(ev["kind"]).to_upper() + "!", 14, Color(1.0, 0.75, 0.3), UiKit.display(800)))
+	v.add_child(top)
+	v.add_child(_label("Buy %s  ·  Sell %s cr     Stock %d" % [_fmt(bp), _fmt(sp), Economy.available(here, id)], 17, UiKit.GOLD, UiKit.body(600)))
+	# shelf: how full their warehouse is (full = cheap)
+	var shelf := Control.new()
+	shelf.custom_minimum_size = Vector2(0, 8)
+	var r := Economy.ratio(here, id)
+	shelf.draw.connect(func():
+		var w := minf(shelf.size.x, 260.0)
+		shelf.draw_rect(Rect2(0, 1, w, 6), Color(1, 1, 1, 0.08))
+		shelf.draw_rect(Rect2(0, 1, w * r, 6), Color(UiKit.GOOD, 0.7).lerp(Color(UiKit.GOLD, 0.8), 1.0 - r)))
+	v.add_child(shelf)
+	if held > 0:
+		var avg := GameState.avg_cost(id)
+		var gain := (sp - avg) * held
+		v.add_child(_label("In hold: %d (paid %s each)  ·  selling all now: %s%s cr" % [held, _fmt(avg), "+" if gain >= 0 else "-", _fmt(absi(gain))], 15,
+			UiKit.GOOD if gain >= 0 else UiKit.BAD, UiKit.body(600)))
+	h.add_child(v)
+	var none := Economy.available(here, id) <= 0
+	_btn(h, "BUY 1", func(b): _buy(b, id, 1), none, 104)
+	_btn(h, "BUY 5", func(b): _buy(b, id, 5), none, 104)
+	_btn(h, "MAX", func(b): _buy(b, id, 999), none, 92)
+	_btn(h, "SELL ALL", func(b): _sell(b, id), held == 0, 130)
+
+
+## The trade computer: the best runs from here using the prices you know.
+func _trade_computer(here: String) -> void:
+	var space := GameState.cargo_capacity() - GameState.cargo_used()
+	var deals: Array = Economy.best_deals(here, maxi(space, 1), GameState.credits, GameState.price_memory, Economy.clock)
+	var c := _card(UiKit.GOOD)
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 6)
+	c[1].add_child(v)
+	v.add_child(_label("TRADE COMPUTER", 17, UiKit.GOOD, UiKit.display(700, 2)))
+	if space <= 0:
+		v.add_child(_label("Your hold is full. Sell first, or find a buyer below.", 15, UiKit.TEXT_DIM, UiKit.body(500)))
+		return
+	if deals.is_empty():
+		v.add_child(_label("No profitable run from here with the prices you know. Visit more stations to learn their prices.", 15, UiKit.TEXT_DIM, UiKit.body(500), true))
+		return
+	for d in deals.slice(0, 3):
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		var t := VBoxContainer.new()
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var where := Galaxy.station_name(d["to"])
+		var hop_txt := "same system" if d["hops"] == 0 else "%d jump%s" % [d["hops"], "" if d["hops"] == 1 else "s"]
+		t.add_child(_label("%s  →  %s (%s)" % [Economy.good_name(d["good"]), where, hop_txt], 16, Color(1, 1, 1), UiKit.body(700)))
+		var age: float = d["age"]
+		var age_txt := "live prices" if age < 60.0 else "prices %d min old" % int(age / 60.0)
+		t.add_child(_label("+%s per unit  ·  about +%s cr for %d units  ·  %s" % [_fmt(d["profit_unit"]), _fmt(d["profit"]), d["units"], age_txt], 14,
+			UiKit.GOLD if age < 600.0 else UiKit.TEXT_DIM, UiKit.body(600)))
+		row.add_child(t)
+		var to: String = d["to"]
+		_btn(row, "SET COURSE", func(b):
+			GameState.set_destination("station", to)
+			world.sfx.ui("tab")
+			GameState.message.emit("Course set: " + Galaxy.station_name(to), UiKit.GOOD)
+			UiKit.pop(b), false, 150)
+		v.add_child(row)
+
+
+func _news_card() -> void:
+	if Economy.news.is_empty():
+		return
+	var c := _card(Color(1.0, 0.8, 0.4))
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 3)
+	c[1].add_child(v)
+	v.add_child(_label("GALACTIC NEWS", 15, Color(1.0, 0.8, 0.4), UiKit.display(700, 2)))
+	for n in Economy.news.slice(0, 3):
+		var ago := int((Economy.clock - float(n["time"])) / 60.0)
+		v.add_child(_label("%s  (%s)" % [n["text"], "just now" if ago < 1 else "%d min ago" % ago], 14, Color(1, 1, 1, 0.8), UiKit.body(500), true))
+
 
 	# salvage parts: some stations sell them, every station buys them
 	var sold_parts: Array = Galaxy.station(station.station_id).get("parts", [])
@@ -556,7 +1034,7 @@ func _buy(b: Control, id: String, n: int) -> void:
 		return
 	world.sfx.play("ui_buy", -4.0, 0.9)
 	_money(GameState.credits - before)
-	_sparkle(b, Galaxy.COMMODITIES[id]["color"])
+	_sparkle(b, Economy.GOODS[id]["color"])
 	_rebuild_keep_scroll.call_deferred()
 
 
@@ -565,8 +1043,13 @@ func _sell(b: Control, id: String) -> void:
 	if total <= 0:
 		_deny(b)
 		return
-	world.sfx.play("ui_buy", -2.0, 1.12)
+	var pr := GameState.last_profit
+	# a bigger profit gets a brighter ka-ching
+	world.sfx.play("ui_buy", -2.0 + clampf(pr / 3000.0, 0.0, 3.0), 1.12 + clampf(pr / 20000.0, 0.0, 0.25))
+	if pr > 0:
+		world.sfx.play("ui_upgrade", -10.0 + clampf(pr / 2000.0, 0.0, 6.0), 1.2)
 	_money(total)
+	_popup(("PROFIT +%s cr" if pr >= 0 else "LOSS -%s cr") % _fmt(absi(pr)), UiKit.GOLD if pr >= 0 else UiKit.BAD)
 	_sparkle(b, UiKit.GOLD)
 	_rebuild_keep_scroll.call_deferred()
 
@@ -708,8 +1191,30 @@ func _build_hangar() -> void:
 			continue
 		var net := GameState.ship_cost(id)
 		v.add_child(_label("%s CR   (trade-in %s cr)" % [_fmt(info["price"]), _fmt(Items.ship_trade_in(GameState.ship))], 16, UiKit.GOLD, UiKit.display(700)))
-		_btn(ch, "INSPECT", _do_inspect.bind(id), id == _inspect, 130)
-		_btn(ch, ("BUY  %s" % _fmt(net)) if net > 0 else ("SWAP  +%s" % _fmt(-net)), _do_buy_ship.bind(id), false, 190)
+		_btn(ch, "INSPECT", _do_inspect.bind(id), id == _inspect, 120)
+		if not GameState.can_fly(id):
+			var lic: String = info["licence"]
+			v.add_child(_label("Needs the %s (%s)" % [Factions.LIST[lic]["licence"], Factions.LIST[lic]["name"]], 15, UiKit.BAD, UiKit.body(600)))
+			continue
+		_btn(ch, ("TRADE IN\n%s" % _fmt(net)) if net > 0 else ("SWAP\n+%s" % _fmt(-net)), _do_buy_ship.bind(id), false, 150).custom_minimum_size.y = 64
+		_btn(ch, "BUY & KEEP\n%s" % _fmt(info["price"]), _do_buy_keep.bind(id), GameState.credits < int(info["price"]), 150).custom_minimum_size.y = 64
+
+
+func _do_buy_keep(b: Button, id: String) -> void:
+	if not _confirmed(b, "keep_" + id, "TAP TO CONFIRM"):
+		return
+	var before := GameState.credits
+	if GameState.buy_ship_keep(id):
+		world.player.refresh_ship()
+		world.sfx.ui("upgrade")
+		_money(GameState.credits - before)
+		_sparkle(b, UiKit.GOLD)
+		_inspect = id
+		GameState.message.emit("Your old ship is parked in your hangar here. Enjoy the %s!" % Items.SHIPS[id]["name"], UiKit.GOOD)
+		GameState.save_game()
+		_rebuild_keep_scroll.call_deferred()
+	else:
+		_deny(b)
 
 
 func _do_inspect(_b: Control, id: String) -> void:
@@ -991,6 +1496,7 @@ func _do_track(b: Control, m: Dictionary) -> void:
 
 func _do_accept(b: Control, m: Dictionary, col: Color) -> void:
 	GameState.accept(m)
+	world._spawn_mission_props()
 	world.sfx.ui("upgrade")
 	_sparkle(b, col)
 	GameState.message.emit("Contract accepted: " + m["title"], UiKit.GOOD)

@@ -46,6 +46,7 @@ var lane_s := 0.0
 var lane_dir := 1
 var lane_offset := Vector2.ZERO
 var lane_speed := 0.0
+var speed_mult := 1.0       # 0.12: ion storms slow the lanes, a rest-stop coffee speeds you up
 var lane_bump_cd := 0.0
 
 # docking
@@ -381,7 +382,7 @@ func _check_merge() -> void:
 		var t: SpaceLane = c["track"]
 		var f := t.frame(c["s"])
 		var d: float = (-global_transform.basis.z).dot(f["fwd"])
-		if absf(d) > 0.6:
+		if absf(d) > 0.6 and (d > 0.0 or not t.oneway):
 			enter_lane(1 if d > 0.0 else -1, true, t)
 			return
 	_lane_was_inside = inside
@@ -404,7 +405,9 @@ func enter_lane(dir := 0, merged := false, track: SpaceLane = null) -> void:
 	var fwd := -global_transform.basis.z
 	if dir == 0:
 		dir = 1 if fwd.dot(f["fwd"]) >= 0.0 else -1
-	if lane_s < 5.0:
+	if lane.oneway:
+		dir = 1
+	elif lane_s < 5.0:
 		dir = 1
 	elif lane_s > lane.length - 5.0:
 		dir = -1
@@ -414,7 +417,9 @@ func enter_lane(dir := 0, merged := false, track: SpaceLane = null) -> void:
 	lane_offset = Vector2(rel.dot(f["right"]), rel.dot(f["up"])).limit_length(lane.radius * 0.7)
 	lane_speed = maxf(speed, 200.0)
 	_ride_basis = global_transform.basis
+	_switch_ease = 1.0
 	junction = {}
+	exit_choice = -1
 	mode = Mode.LANE
 	_lane_was_inside = true
 	lane_changed.emit(true)
@@ -431,6 +436,23 @@ func enter_lane(dir := 0, merged := false, track: SpaceLane = null) -> void:
 var junction := {}
 
 const BAND_WIDTH := 0.8   # the lanes share this fraction of the tube's width
+
+## 0.10 exits: -1 = follow the GPS (take the exit if it's the way to the
+## destination), 0 = stay on, 1 = take it. Reset after every junction.
+var exit_choice := -1
+var gps_exit := -1        # junction node where the GPS route leaves the loop (main sets it)
+
+
+## The pilot's EXIT button: flip between taking the next exit and staying on.
+func toggle_exit() -> void:
+	if junction.is_empty() or junction.get("exit", -1) < 0:
+		return
+	exit_choice = 0 if junction["armed"] else 1
+	_update_junction()
+
+
+func exit_ahead() -> bool:
+	return mode == Mode.LANE and not junction.is_empty() and junction.get("exit", -1) >= 0
 
 
 ## The lanes at the end of track t when riding it in dir.
@@ -456,7 +478,7 @@ func band_centre(i: int, nb: int) -> float:
 func _update_junction() -> void:
 	var end_s: float = lane.length if lane_dir > 0 else 0.0
 	var rem := absf(end_s - lane_s)
-	var look := maxf(4500.0, lane_speed * 6.0)
+	var look := maxf(4500.0, lane_speed * 12.0)
 	if rem > look:
 		junction = {}
 		return
@@ -464,8 +486,27 @@ func _update_junction() -> void:
 	var opts := junction_options(lane, lane_dir)
 	var nb := opts.size()
 	var pick := -1
+	var exit_i := -1
 	if nb > 0:
-		pick = band_at(lane_offset.x * lane_dir, nb)
+		if lane.oneway:
+			# loop network: stay on unless the exit is armed (by the pilot's
+			# EXIT button, or by the GPS when it's the way to the destination)
+			var stay_i := 0
+			for i in nb:
+				var o: Dictionary = opts[i]
+				if o.get("stop", false):
+					stay_i = i
+				elif o["track"].role == "exit":
+					exit_i = i
+				else:
+					stay_i = i
+			pick = stay_i
+			if exit_i >= 0:
+				var take := exit_choice == 1 or (exit_choice == -1 and gps_exit == n)
+				if take:
+					pick = exit_i
+		else:
+			pick = band_at(lane_offset.x * lane_dir, nb)
 		if autopilot:
 			var want := -1
 			if ap_route.size() > 1:
@@ -476,7 +517,8 @@ func _update_junction() -> void:
 				want = nb - 1
 			if want >= 0:
 				pick = want
-	junction = {"node": n, "name": net.node_name(n), "kind": net.nodes[n]["kind"], "dist": rem, "options": opts, "pick": pick, "bands": nb}
+	junction = {"node": n, "name": net.node_name(n), "kind": net.nodes[n]["kind"], "dist": rem, "options": opts, "pick": pick, "bands": nb,
+		"exit": exit_i, "armed": exit_i >= 0 and pick == exit_i}
 
 
 func _lane_ride(delta: float) -> void:
@@ -488,7 +530,7 @@ func _lane_ride(delta: float) -> void:
 		var endp: float = lane.length if lane_dir > 0 else 0.0
 		ap_lane_exit_s = -1.0 if (ap_route.size() > 1 and absf(es - endp) < 5.0) else es
 	var sp := lane.spec()
-	var boosting: bool = inp.boost
+	var boosting: bool = inp.boost and lane.role != "exit" and lane.role != "entry"
 	var steer: Vector2 = inp.stick
 	var target_speed: float = sp["min"] + (sp["speed"] - sp["min"]) * inp.throttle + (sp["boost"] if boosting else 0.0)
 	if autopilot:
@@ -496,6 +538,7 @@ func _lane_ride(delta: float) -> void:
 		# sharp turns ahead; boost still works where it's safe
 		var k := lane.max_curvature_ahead(lane_s, lane_dir, maxf(lane_speed * 2.5, 800.0))
 		target_speed = minf(sp["ap"] + (sp["boost"] * 0.6 if boosting else 0.0), lane.safe_speed(k))
+	target_speed *= speed_mult
 	if lane_speed > target_speed + 150.0:
 		lane_speed = move_toward(lane_speed, target_speed, delta * maxf(2500.0, lane_speed * 0.9))   # braking
 	else:
@@ -506,9 +549,12 @@ func _lane_ride(delta: float) -> void:
 	var s_prev := lane_s
 	lane_s += lane_dir * lane_speed * delta
 
-	# turns push you toward the outside wall
-	var v_eff := minf(lane_speed, sp["speed"] + sp["boost"])
-	var push := lane.drift(clampf(lane_s, 0.0, lane.length), v_eff)
+	# 0.10: the tube carries you through its bends like a rail; turns no
+	# longer push you toward the wall (only the old two-way roads still do)
+	var push := Vector2.ZERO
+	if not lane.oneway:
+		var v_eff := minf(lane_speed, sp["speed"] + sp["boost"])
+		push = lane.drift(clampf(lane_s, 0.0, lane.length), v_eff)
 	drift_push = push
 	_update_junction()
 	var steer_v: Vector2
@@ -531,7 +577,7 @@ func _lane_ride(delta: float) -> void:
 	# the tube gently pulls you back toward the middle, harder near the wall,
 	# so easy turns ride themselves and only sharp ones at speed need a hand
 	var hold := Vector2.ZERO
-	if not junction.is_empty() and junction["bands"] > 1:
+	if not junction.is_empty() and junction["bands"] > 1 and not lane.oneway:
 		# near a junction it holds you in the middle of your lane instead,
 		# so you slide across to pick a branch and it keeps you there
 		var nb: int = junction["bands"]
@@ -540,8 +586,16 @@ func _lane_ride(delta: float) -> void:
 	lane_offset += (steer_v + push + centre) * delta
 
 	if lane_offset.length() > lane.radius - 6.0:
-		_thrown_off()
-		return
+		if lane.oneway:
+			# soft wall: a bump and a nudge back, never thrown off
+			lane_offset = lane_offset.limit_length(lane.radius - 40.0)
+			if lane_bump_cd <= 0.0:
+				lane_bump_cd = 0.6
+				world.sfx.play("hit_shield", -12.0)
+				world.shake(0.25)
+		else:
+			_thrown_off()
+			return
 
 	if autopilot and ap_lane_exit_s >= 0.0 and (ap_lane_exit_s - lane_s) * lane_dir < lane_speed * 0.6:
 		_leave_lane(true)
@@ -613,11 +667,20 @@ func _switch_track(b: Dictionary) -> void:
 	var rel: Vector3 = wp - nf["origin"]
 	lane_offset = Vector2(rel.dot(nf["right"]), rel.dot(nf["up"])).limit_length(lane.radius * 0.55)
 	junction = {}
+	exit_choice = -1
 	_switch_ease = 1.0
 	if autopilot and ap_route.size() > 1 and ap_route[1]["track"] == lane:
 		ap_route.pop_front()
 	world.sfx.play("lane_merge", -7.0)
-	if old_kind != lane.kind:
+	if lane.role == "loop" and old_kind == "highway":
+		pass   # loop segment to loop segment: nothing to announce
+	elif lane.role == "exit":
+		world.shake(0.4)
+		GameState.message.emit("Exit %d: ramp to %s" % [lane.exit_no, b["name"]], Color(0.5, 1.0, 0.65))
+	elif lane.role == "loop":
+		world.shake(0.3)
+		GameState.message.emit("Merged onto the highway loop", Color(1.0, 0.85, 0.5))
+	elif old_kind != lane.kind:
 		world.shake(0.5 if lane.kind == "road" else 0.3)
 		GameState.message.emit(("Onto the HIGHWAY toward %s" if lane.kind == "highway" else "Off the highway: road to %s") % b["name"], Color(1.0, 0.85, 0.5) if lane.kind == "highway" else Color(0.5, 0.9, 1.0))
 	elif not autopilot:

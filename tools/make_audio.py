@@ -729,6 +729,94 @@ SFX = {
 }
 
 
+# --- 0.12 the road ----------------------------------------------------------
+
+def sfx_radio_tune():
+    d = 0.55
+    t = t_axis(d)
+    st = bp(noise(d), 900, 5000) * (0.5 + 0.5 * np.sin(2 * np.pi * 11 * t) ** 2) * np.exp(-t * 3)
+    wh = np.sin(chirp_phase(t, 2400, 600, d)) * 0.12 * np.exp(-t * 4)
+    return fade(stereo(st * 0.6 + wh, delay_ms=7), 0.003, 0.08)
+
+
+def sfx_photo():
+    d = 0.35
+    t = t_axis(d)
+    c1 = hp(noise(d), 3000) * np.exp(-t * 90)
+    c2 = np.roll(hp(noise(d), 2000) * np.exp(-t * 60), int(0.09 * SR)) * 0.8
+    whir = np.sin(2 * np.pi * (900 + 400 * t) * t) * np.exp(-((t - 0.2) * 14) ** 2) * 0.15
+    return fade(stereo(c1 + c2 + whir), 0.0, 0.05)
+
+
+def sfx_event_ping():
+    x = sum(fm_bell(note_hz(n), 1.6, ratio=2.0, index=1.2, decay=2.6) * g for n, g in ((76, 0.5), (83, 0.35)))
+    x2 = np.concatenate([np.zeros(int(0.16 * SR)), fm_bell(note_hz(88), 1.4, ratio=2.0, index=1.0, decay=3) * 0.35])
+    y = np.zeros(max(len(x), len(x2)))
+    y[:len(x)] += x
+    y[:len(x2)] += x2
+    return reverb(stereo(y, delay_ms=9), wet=0.3, dur=1.6, decay=3.0)
+
+
+def sfx_scan():
+    d = 1.4
+    t = t_axis(d)
+    sweep = np.sin(chirp_phase(t, 300, 2400, d)) * 0.25 * np.sin(np.pi * t / d)
+    blips = np.sin(2 * np.pi * 1800 * t) * (np.sin(2 * np.pi * 7 * t) > 0.92) * 0.2
+    return fade(stereo(sweep + blips, delay_ms=11), 0.01, 0.1)
+
+
+def sfx_cruise_on():
+    d = 1.2
+    t = t_axis(d)
+    x = np.sin(chirp_phase(t, 70, 160, d)) * 0.6 * np.exp(-t * 1.5) + lp(noise(d), 900) * 0.3 * np.sin(np.pi * t / d)
+    return fade(stereo(x, delay_ms=15), 0.02, 0.2)
+
+
+def sfx_kaching():
+    a = fm_bell(note_hz(84), 0.9, ratio=3.0, index=2.0, decay=4)
+    b = np.concatenate([np.zeros(int(0.08 * SR)), fm_bell(note_hz(91), 1.1, ratio=3.0, index=2.0, decay=3.5)])
+    coins = hp(noise(0.5), 5000) * np.exp(-t_axis(0.5) * 9) * 0.25
+    y = np.zeros(len(b))
+    y[:len(a)] += a * 0.6
+    y += b * 0.6
+    y[:len(coins)] += coins
+    return reverb(stereo(y, delay_ms=6), wet=0.2, dur=1.0, decay=4.0)
+
+
+def sfx_dice():
+    d = 0.9
+    out = np.zeros(int(d * SR))
+    r = np.random.default_rng(3)
+    tpos = 0.0
+    for k in range(7):
+        c = bp(noise(0.05), 1500, 6000) * np.exp(-t_axis(0.05) * 80) * (0.9 - k * 0.1)
+        add_at(out, c, int(tpos * SR))
+        tpos += 0.05 + k * 0.03 + r.uniform(0, 0.03)
+    return stereo(out, delay_ms=5)
+
+
+def sfx_cheers():
+    d = 1.6
+    t = t_axis(d)
+    clink = sum(fm_bell(f, 1.0, ratio=2.76, index=1.5, decay=5) for f in (2200, 2650)) * 0.3
+    crowd = bp(noise(d), 300, 2500) * np.sin(np.pi * t / d) ** 0.5 * 0.35
+    y = crowd.copy()
+    y[:len(clink)] += clink
+    return reverb(stereo(y, delay_ms=12), wet=0.25, dur=1.2, decay=3.5)
+
+
+SFX.update({
+    "radio_tune": (sfx_radio_tune, 0.6),
+    "photo": (sfx_photo, 0.7),
+    "event_ping": (sfx_event_ping, 0.75),
+    "scan": (sfx_scan, 0.6),
+    "cruise_on": (sfx_cruise_on, 0.8),
+    "kaching": (sfx_kaching, 0.8),
+    "dice": (sfx_dice, 0.7),
+    "cheers": (sfx_cheers, 0.7),
+})
+
+
 # ----------------------------------------------------------------------------
 # music
 # ----------------------------------------------------------------------------
@@ -1031,6 +1119,185 @@ def music_combat():
     return softclip(body * 1.15, 1.3)
 
 
+def epiano(freq, dur, vel=1.0):
+    t = t_axis(dur)
+    mod = np.sin(2 * np.pi * freq * 1.0 * t) * 1.6 * np.exp(-t * 3.0) * vel
+    car = np.sin(2 * np.pi * freq * t + mod) + 0.25 * np.sin(2 * np.pi * freq * 2 * t) * np.exp(-t * 4)
+    trem = 1 + 0.12 * np.sin(2 * np.pi * 4.5 * t)
+    return car * env_exp(dur, 1.4, 0.004) * trem
+
+
+def music_radio_lofi():
+    """'Lane FM': 82 BPM dusty lofi groove - Rhodes chords, swung hats, round sub, vinyl hiss."""
+    bpm = 82.0
+    beat = 60.0 / bpm
+    bars = 32
+    length_s = bars * 4 * beat
+    n = int((length_s + 4.0) * SR)
+    mix = np.zeros((n, 2))
+    r = np.random.default_rng(21)
+    prog = [[50, 57, 60, 64, 65], [55, 59, 62, 65, 69], [48, 55, 59, 62, 64], [45, 52, 55, 60, 64]]
+
+    def put(sig, ts, g, p=0.0):
+        o = int(ts * SR)
+        st = pan(sig * g, p) if sig.ndim == 1 else sig * g
+        m = min(len(st), n - o)
+        if m > 0:
+            mix[o:o + m] += st[:m]
+
+    kick = lp(drum_kick(0.5), 2500)
+    snare = lp(drum_snare(0.35), 5000)
+    hat = lp(drum_hat(0.08), 9000)
+    sw = beat * 0.16
+    for bar in range(bars):
+        t0 = bar * 4 * beat
+        ch = prog[(bar // 2) % len(prog)]
+        for pos in (0.0, 1.75, 2.5):
+            put(kick, t0 + pos * beat, 0.8)
+        for pos in (1.0, 3.0):
+            put(snare, t0 + pos * beat + 0.02, 0.38, 0.05)
+        for k in range(8):
+            put(hat, t0 + k * beat / 2 + (sw if k % 2 else 0), 0.14 if k % 2 else 0.2, 0.3)
+        # rhodes: stabbed chord on 1 and the "and" of 2, every bar a little different
+        for pos in ((0.0, 2.2), (1.5, 1.2) if bar % 2 else (2.5, 1.4)):
+            for vi, nt in enumerate(ch[1:]):
+                put(epiano(note_hz(nt), pos[1] * beat + 1.0, 0.8), t0 + pos[0] * beat + vi * 0.012, 0.09, -0.4 + vi * 0.25)
+        # sub
+        m = int(4 * beat * SR)
+        tt = np.arange(m) / SR
+        root = ch[0] - 12
+        b = np.sin(2 * np.pi * note_hz(root) * tt) * np.exp(-tt * 0.8) * 0.5
+        put(b, t0, 1.0)
+        # melody sprinkle
+        if bar % 4 in (1, 3):
+            for k in range(3):
+                nt = int(r.choice([ch[2] + 12, ch[3] + 12, ch[4] + 12, ch[1] + 24]))
+                put(fm_bell(note_hz(nt), 1.2, ratio=1.0, index=0.8, decay=3) * 0.12, t0 + (k * 1.25 + 0.5) * beat, 1.0, r.uniform(-0.6, 0.6))
+    hiss = hp(rng.standard_normal(n), 3000) * 0.006
+    crackle = (rng.random(n) > 0.9993) * rng.standard_normal(n) * 0.25
+    mix += np.stack([hiss + crackle, np.roll(hiss + crackle, 300)], 1)
+    mix = lp(mix, 7500)
+    mix = reverb(mix, wet=0.18, dur=1.8, decay=3.0, bright=5000, tail=False)
+    body_n = int(length_s * SR)
+    body = mix[:body_n].copy()
+    body[:n - body_n] += mix[body_n:]
+    return softclip(body * 1.2, 1.2)
+
+
+def music_radio_synth():
+    """'Neon Drift': 100 BPM synthwave cruise - 8th-note bass, gated pads, big snare, lead hook."""
+    bpm = 100.0
+    beat = 60.0 / bpm
+    bars = 32
+    length_s = bars * 4 * beat
+    n = int((length_s + 5.0) * SR)
+    mix = np.zeros((n, 2))
+    prog = [(45, [57, 60, 64]), (41, [57, 60, 65]), (48, [55, 60, 64]), (43, [55, 59, 62])]
+
+    def put(sig, ts, g, p=0.0):
+        o = int(ts * SR)
+        st = pan(sig * g, p) if sig.ndim == 1 else sig * g
+        m = min(len(st), n - o)
+        if m > 0:
+            mix[o:o + m] += st[:m]
+
+    kick = drum_kick(0.5)
+    snare = reverb(stereo(drum_snare(0.6)), wet=0.45, dur=1.5, decay=2.5)
+    hat = drum_hat(0.06)
+    hook = [12, 7, 9, 7, 4, 7, 2, 0]
+    for bar in range(bars):
+        t0 = bar * 4 * beat
+        root, notes = prog[(bar // 2) % len(prog)]
+        for b in range(4):
+            put(kick, t0 + b * beat, 0.75)
+            put(hat, t0 + b * beat + beat / 2, 0.15, 0.3)
+        for b in (1, 3):
+            put(snare, t0 + b * beat, 0.4)
+        # 8th bass
+        for k in range(8):
+            m = int(beat / 2 * 0.9 * SR)
+            tt = np.arange(m) / SR
+            f = note_hz(root - 12 + (12 if k % 2 else 0))
+            v = mod_lp(saw(2 * np.pi * f * tt) * np.exp(-tt * 6), 300 + 1400 * np.exp(-tt * 18), block=64)
+            put(v, t0 + k * beat / 2, 0.32)
+        # gated pad (16ths)
+        m = int(4 * beat * SR)
+        tt = np.arange(m) / SR
+        pad = sum(supersaw(note_hz(x), m, voices=5, detune=0.01, seed=x) for x in notes) / 3
+        gate = 0.35 + 0.65 * ((tt % (beat / 4)) < beat / 6)
+        put(lp(pad * gate, 2400), t0, 0.12, -0.2)
+        put(lp(np.roll(pad * gate, 200), 2400), t0, 0.12, 0.2)
+        # lead hook in the second half
+        if bar >= 16:
+            for k, iv in enumerate(hook):
+                if (bar + k) % 3 == 2:
+                    continue
+                d = beat * 0.45
+                mm = int(d * SR)
+                tl = np.arange(mm) / SR
+                f = note_hz(notes[0] + iv)
+                lead = (saw(2 * np.pi * f * tl) + saw(2 * np.pi * f * 1.006 * tl)) * 0.5 * adsr(mm, 0.01, 0.08, 0.6, 0.1)
+                put(lp(lead, 3200), t0 + k * beat / 2, 0.08, 0.15)
+    mix = delay_pingpong(mix, beat * 0.75, fb=0.3, wet=0.15, n_taps=4, damp=3000)[:n]
+    mix = reverb(hp(mix, 30), wet=0.15, dur=2.0, decay=2.8, bright=6000, tail=False)
+    body_n = int(length_s * SR)
+    body = mix[:body_n].copy()
+    body[:n - body_n] += mix[body_n:]
+    return softclip(body * 1.15, 1.25)
+
+
+def music_bar():
+    """Cantina: 112 BPM swung shuffle on a detuned piano, upright bass and brushes."""
+    bpm = 112.0
+    beat = 60.0 / bpm
+    bars = 24
+    length_s = bars * 4 * beat
+    n = int((length_s + 3.0) * SR)
+    mix = np.zeros((n, 2))
+    r = np.random.default_rng(8)
+    prog = [(43, [59, 62, 65]), (43, [59, 62, 65]), (48, [58, 64, 67]), (48, [58, 64, 67]),
+            (43, [59, 62, 65]), (50, [60, 65, 66]), (48, [58, 64, 67]), (50, [60, 65, 66])]
+
+    def put(sig, ts, g, p=0.0):
+        o = int(ts * SR)
+        st = pan(sig * g, p) if sig.ndim == 1 else sig * g
+        m = min(len(st), n - o)
+        if m > 0:
+            mix[o:o + m] += st[:m]
+
+    brush = bp(noise(0.25), 2000, 8000) * np.exp(-t_axis(0.25) * 18)
+    sw = beat * 0.66
+    for bar in range(bars):
+        t0 = bar * 4 * beat
+        root, notes = prog[bar % len(prog)]
+        for b in range(4):
+            put(brush, t0 + b * beat, 0.18 if b % 2 else 0.1, 0.3)
+            put(brush, t0 + b * beat + sw, 0.08, 0.35)
+            # walking bass
+            nt = root - 12 + [0, 4, 7, 9][b]
+            m = int(beat * 0.95 * SR)
+            tt = np.arange(m) / SR
+            bs = np.sin(2 * np.pi * note_hz(nt) * tt) * np.exp(-tt * 3.5) * (1 - np.exp(-tt * 300))
+            put(bs + 0.2 * np.sin(4 * np.pi * note_hz(nt) * tt) * np.exp(-tt * 6), t0 + b * beat, 0.42, -0.1)
+            # piano comp on the off-beats
+            if b % 2 == 1 or r.random() < 0.3:
+                for vi, x in enumerate(notes):
+                    pn = fm_bell(note_hz(x), 0.7, ratio=1.0, index=1.4, decay=5) + fm_bell(note_hz(x) * 1.004, 0.7, ratio=1.0, index=1.0, decay=5) * 0.5
+                    put(pn, t0 + b * beat + sw * (0 if b % 2 == 0 else 1) * 0.5 + vi * 0.008, 0.06, 0.25)
+        # right-hand lick
+        if bar % 2 == 1:
+            for k in range(4):
+                nt = int(r.choice([notes[0] + 12, notes[1] + 12, notes[2] + 12, root + 24 + 3]))
+                put(fm_bell(note_hz(nt), 0.6, ratio=1.0, index=1.8, decay=6) * 0.09, t0 + k * beat * 0.5 + 2 * beat, 1.0, 0.4)
+    murmur = lp(bp(rng.standard_normal(n), 250, 1800), 1500) * 0.012
+    mix += np.stack([murmur, np.roll(murmur, 4000)], 1)
+    mix = reverb(mix, wet=0.2, dur=1.4, decay=3.5, bright=5000, tail=False)
+    body_n = int(length_s * SR)
+    body = mix[:body_n].copy()
+    body[:n - body_n] += mix[body_n:]
+    return softclip(body * 1.2, 1.2)
+
+
 def main():
     what = sys.argv[1] if len(sys.argv) > 1 else "all"
     if what in ("all", "sfx"):
@@ -1047,6 +1314,10 @@ def main():
         print("music:")
         write("music_flight", music_flight(), peak=0.8, q=5)
         write("music_station", music_station(), peak=0.8, q=5)
+    if what in ("all", "music", "radio"):
+        write("music_radio_lofi", music_radio_lofi(), peak=0.8, q=5)
+        write("music_radio_synth", music_radio_synth(), peak=0.8, q=5)
+        write("music_bar", music_bar(), peak=0.8, q=5)
     if what in ("all", "music", "combat"):
         write("music_combat", music_combat(), peak=0.85, q=5)
 
