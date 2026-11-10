@@ -33,7 +33,9 @@ func _ready() -> void:
 			"engine_loop", "lane_loop", "lane_enter", "lane_exit", "boost", "jump", "ui_click", "ui_tab",
 			"ui_buy", "ui_upgrade", "ui_error", "ui_open", "dock_clamp", "launch", "alarm",
 			"mission_complete", "target_lock", "autofire_on", "autofire_off", "missile_launch", "loot_pickup",
-			"autopilot_on", "autopilot_off", "craft", "equip", "lane_merge", "music_flight", "music_station", "music_combat"]:
+			"autopilot_on", "autopilot_off", "craft", "equip", "lane_merge", "music_flight", "music_station", "music_combat",
+			"radio_tune", "photo", "event_ping", "scan", "cruise_on", "kaching", "dice", "cheers",
+			"music_radio_lofi", "music_radio_synth", "music_bar"]:
 		var s = load(DIR + f + ".ogg")
 		if s:
 			if s is AudioStreamOggVorbis and (f.ends_with("_loop") or f.begins_with("music_")):
@@ -48,7 +50,7 @@ func _ready() -> void:
 
 	_engine = _looper("engine_loop", -40.0)
 	_lane = _looper("lane_loop", -60.0)
-	for m in ["music_flight", "music_station", "music_combat"]:
+	for m in ["music_flight", "music_station", "music_combat", "music_radio_lofi", "music_radio_synth", "music_bar"]:
 		var p := AudioStreamPlayer.new()
 		p.stream = _streams.get(m)
 		p.bus = "Music"
@@ -85,17 +87,41 @@ func play(name: String, db := 0.0, pitch := 1.0) -> void:
 	p.play()
 
 
+## 0.12 radio: what plays while you fly. Ambient gets a per-system key.
+const RADIO := [
+	{"name": "Starlane Ambient", "track": "music_flight", "dj": ["...and now, the sound of a very large, very quiet universe.", "Ambient hour. Breathe in. Breathe out. Mind the exits.", "This one goes out to everyone hauling ice tonight."]},
+	{"name": "Lane FM", "track": "music_radio_lofi", "dj": ["Lane FM: lofi beats to haul cargo to.", "You're on Lane FM. Traffic on the loop is smooth, so's this.", "Lane FM. Tip your bartender, check your fuel, stay cozy."]},
+	{"name": "Neon Drift", "track": "music_radio_synth", "dj": ["NEON DRIFT! Sunglasses on, shields up.", "Neon Drift, all synth, all night, all the way round the loop.", "This is Neon Drift. If you can read this, you're cruising."]},
+	{"name": "Radio off", "track": "", "dj": ["Static... and the hum of your own engines."]},
+]
+var flight_pitch := 1.0
+
+
 func music(name: String) -> void:
-	_music_target = "music_" + name
+	if name == "flight":
+		var ch: Dictionary = RADIO[clampi(Settings.radio, 0, RADIO.size() - 1)]
+		_music_target = ch["track"]
+	else:
+		_music_target = "music_" + name
 	var p: AudioStreamPlayer = _music.get(_music_target)
 	if p and not p.playing:
+		p.pitch_scale = flight_pitch if _music_target == "music_flight" else 1.0
 		p.play()
+
+
+## Next radio channel; returns its DJ line.
+func next_radio() -> String:
+	Settings.set_value("radio", (Settings.radio + 1) % RADIO.size())
+	play("radio_tune", -6.0)
+	var ch: Dictionary = RADIO[Settings.radio]
+	var lines: Array = ch["dj"]
+	return "%s  ·  %s" % [ch["name"].to_upper(), lines[randi() % lines.size()]]
 
 
 func _process(delta: float) -> void:
 	for k in _music:
 		var p: AudioStreamPlayer = _music[k]
-		var on_db := -9.5 if k == "music_combat" else -6.0
+		var on_db := -9.5 if k == "music_combat" else (-8.0 if k.begins_with("music_radio") else -6.0)
 		var target := on_db if k == _music_target else -60.0
 		# combat kicks in fast, everything else drifts
 		var up_rate := 40.0 if k == "music_combat" else 14.0

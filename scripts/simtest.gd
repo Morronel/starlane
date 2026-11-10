@@ -128,6 +128,329 @@ func _scroll_test() -> bool:
 	return true
 
 
+
+# --- 0.10 roads for humans ---------------------------------------------------------
+
+## 0.12 "the road": cruise, storms, distress calls, customs, pirate tolls,
+## drifting cargo and postcards.
+func _road_tests() -> bool:
+	var p: PlayerShip = main.player
+	var road: RoadEvents = main.road
+	var net: RoadNet = main.net
+	road.timer = 99999.0
+	Engine.time_scale = 1.0
+	var loop: SpaceLane = null
+	for t in net.tracks:
+		if t.role == "loop" and (loop == null or t.length > loop.length):
+			loop = t
+	p.mode = PlayerShip.Mode.FLIGHT
+	p.lane = null
+	var f: Dictionary = loop.frame(loop.length * 0.1)
+	var start: Vector3 = f["origin"] + f["right"] * (loop.radius + 200.0)
+	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 6000.0 - start).normalized(), Vector3.UP), start)
+	p._lane_was_inside = false
+	p._merge_cd = 0.0
+	p.exit_choice = 0
+	GameState.destination = {}
+	if not await _wait_until(func(): return p.mode == PlayerShip.Mode.LANE, 12.0):
+		return _failb("road test could not merge onto the loop")
+	await _wait(0.3)
+	if not road.cruise_available():
+		return _failb("cruise not offered on the open loop")
+	road.take_offer()
+	if not road.cruise or Engine.time_scale != RoadEvents.CRUISE_SCALE:
+		return _failb("cruise did not engage")
+	road.take_offer()
+	if road.cruise or Engine.time_scale != 1.0:
+		return _failb("cruise did not switch off")
+	print("road: cruise x3 on and off")
+	road.start("storm")
+	await _wait(0.2)
+	if p.speed_mult > 0.6:
+		return _failb("ion storm did not slow the lane")
+	road.storm_t = 0.0
+	road.start("distress")
+	if road.offer().get("label", "") != "HELP HAULER":
+		return _failb("distress call not offered")
+	var cr0 := GameState.credits
+	road.take_offer()
+	await _wait(0.3)
+	if p.mode != PlayerShip.Mode.FLIGHT or road.ev.get("phase", "") != "go":
+		return _failb("helping the hauler did not drop us out to it")
+	p.global_position = road.ev["pos"] + Vector3(0, 0, 150)
+	await _wait(0.4)
+	if not road.ev.is_empty() or GameState.credits <= cr0:
+		return _failb("the hauler did not thank us")
+	print("road: helped a hauler, +%d cr" % (GameState.credits - cr0))
+	GameState.cargo["stims"] = 3
+	GameState.cargo_cost["stims"] = 1800
+	cr0 = GameState.credits
+	road.start("customs")
+	await _wait(5.5)
+	if GameState.cargo.has("stims") or GameState.credits >= cr0:
+		return _failb("customs missed the contraband")
+	print("road: customs fined %d cr and took the stims" % (cr0 - GameState.credits))
+	var foes0 := get_tree().get_nodes_in_group("enemies").size()
+	road.start("pirates")
+	await _wait(0.2)
+	var crew: int = road.ev.get("crew", []).size()
+	if crew < 2 or road.offer().is_empty():
+		return _failb("pirate stop did not offer a toll")
+	cr0 = GameState.credits
+	road.take_offer()
+	await _wait(0.3)
+	if get_tree().get_nodes_in_group("enemies").size() > foes0 or GameState.credits >= cr0:
+		return _failb("paying the toll did not send the pirates away")
+	print("road: paid a %d cr pirate toll, %d pirates left" % [cr0 - GameState.credits, crew])
+	var loot0 := get_tree().get_nodes_in_group("loot").size()
+	road.start("derelict")
+	road.take_offer()
+	await _wait(0.2)
+	if get_tree().get_nodes_in_group("loot").size() < loot0 + 3:
+		return _failb("derelict pod spilled no cargo")
+	# postcards: the comet and the system wonder
+	road.start("comet")
+	await _wait(0.2)
+	p.global_transform = Transform3D(Basis.looking_at((road.comet.global_position - p.global_position).normalized(), Vector3.UP), p.global_position)
+	main.camera.snap()
+	await _wait(0.5)
+	cr0 = GameState.credits
+	road.take_photo()
+	if not GameState.postcards.has("comet_" + GameState.system_id) or GameState.credits <= cr0:
+		return _failb("comet photo did not count")
+	var wp: Vector3 = road.wonder.global_position
+	var from := wp + Vector3(9000, 1500, 0)
+	p.global_transform = Transform3D(Basis.looking_at((wp - from).normalized(), Vector3.UP), from)
+	main.camera.snap()
+	await _wait(0.5)
+	road.take_photo()
+	if not GameState.postcards.has("wonder_" + GameState.system_id):
+		return _failb("wonder photo did not count (target %s)" % str(road.photo_target()))
+	print("road: postcards ", GameState.postcards.keys())
+	road.timer = 90.0
+	return true
+
+
+## 1.0: every one of the 20 systems builds a clean loop.
+func _all_systems() -> bool:
+	var p: PlayerShip = main.player
+	var cur: String = GameState.system_id
+	var worst_all := 0.0
+	for sid in Galaxy.SYSTEMS:
+		main.load_system(sid)
+		var net: RoadNet = main.net
+		var exits := 0
+		var worst := 0.0
+		for t in net.tracks:
+			if t.role == "exit":
+				exits += 1
+			if t.oneway:
+				for o in p.junction_options(t, 1):
+					if not o.get("stop", false):
+						worst = maxf(worst, absf(o["turn"]))
+		var pois: int = main.stations.size() + main.gates.size() + 1
+		if exits != pois or worst > 15.0:
+			return _failb("%s: %d exits for %d destinations, sharpest turn %d" % [sid, exits, pois, int(worst)])
+		worst_all = maxf(worst_all, worst)
+		await get_tree().process_frame
+	print("all %d systems build clean loops, sharpest junction turn %d deg" % [Galaxy.SYSTEMS.size(), int(worst_all)])
+	main.load_system(cur)
+	return true
+
+
+func _failb(why: String) -> bool:
+	_fail(why)
+	return false
+
+
+func _loop_tests() -> bool:
+	var p: PlayerShip = main.player
+	var net: RoadNet = main.net
+	# shape: one loop, every fork a 2-way choice, every turn gentle
+	var forks := 0
+	var worst := 0.0
+	var exits := 0
+	for t in net.tracks:
+		if t.role == "exit":
+			exits += 1
+		for d in [1, -1]:
+			if t.oneway and d < 0:
+				continue
+			var opts: Array = p.junction_options(t, d)
+			var real := opts.filter(func(o): return not o.get("stop", false))
+			if real.size() > 2:
+				_fail("a junction offers %d ways" % real.size())
+				return false
+			if real.size() == 2:
+				forks += 1
+			for o in real:
+				worst = maxf(worst, absf(o["turn"]))
+			if opts.is_empty():
+				_fail("track %s leads nowhere" % t.name)
+				return false
+	var pois: int = main.stations.size() + main.gates.size() + 1
+	print("loop network: %d tracks, %d exits for %d destinations, %d forks, sharpest junction turn %d deg" % [net.tracks.size(), exits, pois, forks, int(worst)])
+	if exits != pois:
+		_fail("expected one exit per destination")
+		return false
+	if worst > 15.0:
+		_fail("a junction turns %d degrees" % int(worst))
+		return false
+
+	# auto-merge: fly into the loop along it
+	var loop: SpaceLane = null
+	for t in net.tracks:
+		if t.role == "loop" and (loop == null or t.length > loop.length):
+			loop = t
+	var f: Dictionary = loop.frame(loop.length * 0.3)
+	var start: Vector3 = f["origin"] + f["right"] * (loop.radius + 200.0)
+	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 6000.0 - start).normalized(), Vector3.UP), start)
+	p._lane_was_inside = false
+	p._merge_cd = 0.0
+	GameInput.throttle = 1.0
+	var ok := await _wait_until(func(): return p.mode == PlayerShip.Mode.LANE, 12.0)
+	if not ok:
+		_fail("did not auto-merge into the highway loop")
+		return false
+	print("auto-merged onto the ", p.lane.role, " ", p.lane.kind, ", dir ", p.lane_dir)
+
+	# stay on: with nothing armed the loop carries you past exits
+	GameState.destination = {}
+	Engine.time_scale = 4.0
+	var passed := {}
+	ok = await _wait_until(func():
+		if p.mode == PlayerShip.Mode.LANE and p.lane.role == "loop":
+			passed[p.lane] = true
+		return p.mode != PlayerShip.Mode.LANE or p.lane.role == "exit" or passed.size() >= 5, 60.0)
+	if p.mode != PlayerShip.Mode.LANE or p.lane.role == "exit":
+		Engine.time_scale = 1.0
+		_fail("left the loop without asking (mode %d)" % p.mode)
+		return false
+	print("stayed on the loop through %d segments" % passed.size())
+
+	# the EXIT button takes the next exit
+	ok = await _wait_until(func(): return p.exit_ahead(), 30.0)
+	var want: int = p.junction["options"][p.junction["exit"]]["track"].exit_no
+	p.toggle_exit()
+	ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane.role == "exit", 30.0)
+	if p.mode != PlayerShip.Mode.LANE or p.lane.exit_no != want:
+		Engine.time_scale = 1.0
+		_fail("TAKE EXIT did not take exit %d" % want)
+		return false
+	print("took exit %d onto the ramp to %s at %d m/s" % [want, net.node_name(p.lane.node_b), int(p.lane_speed)])
+	ok = await _wait_until(func(): return p.mode == PlayerShip.Mode.FLIGHT, 30.0)
+	Engine.time_scale = 1.0
+	if not ok:
+		_fail("ramp did not end in free flight")
+		return false
+	print("ramp ended in free flight, speed %d" % int(p.speed))
+
+	# a human pilot: slow hands, no autopilot, only the GPS and the EXIT
+	# button. Must reach every destination in the system from a station.
+	var targets := []
+	for sid in main.stations:
+		targets.append({"type": "station", "id": sid})
+	for k in main.gates:
+		targets.append({"type": "gate", "id": k})
+	targets.append({"type": "beacon"})
+	var from: String = main.stations.keys()[0]
+	for tg in targets:
+		if tg["type"] == "station" and tg["id"] == from:
+			continue
+		var st: Station = main.stations[from]
+		p.mode = PlayerShip.Mode.FLIGHT
+		p.lane = null
+		p.global_transform = st.undock_transform()
+		p.speed = 60.0
+		p.velocity = Vector3.ZERO
+		if tg["type"] == "station":
+			GameState.set_destination("station", tg["id"])
+		elif tg["type"] == "gate":
+			# a gate is the way to a station in the next system
+			GameState.set_destination("station", Galaxy.SYSTEMS[tg["id"]]["stations"][0]["id"])
+		else:
+			GameState.destination = {}
+			var hm := {"id": 9999, "kind": "hunt", "state": "active", "system": GameState.system_id, "title": "test nest",
+				"desc": "", "count": 1, "left": 1, "reward": 1, "station": "", "spawned": true}
+			GameState.missions.append(hm)
+			GameState.set_destination("mission", 9999)
+		var t0 := Time.get_ticks_msec()
+		Engine.time_scale = 4.0
+		var res: String = await _human_fly(tg)
+		Engine.time_scale = 1.0
+		GameInput.touch_stick = Vector2.ZERO
+		print("  human pilot %s -> %s: %s (%.0f s game time)" % [from, tg.get("id", "beacon"), res, (Time.get_ticks_msec() - t0) * 4.0 / 1000.0])
+		if res != "arrived":
+			_fail("a human pilot could not reach " + str(tg.get("id", "beacon")))
+			return false
+		if p.mode == PlayerShip.Mode.DOCKING:
+			await _wait_until(func(): return p.mode == PlayerShip.Mode.DOCKED, 10.0)
+		if p.mode == PlayerShip.Mode.DOCKED:
+			main.menu.visible = false
+			p.mode = PlayerShip.Mode.FLIGHT
+	GameState.destination = {}
+	GameState.missions = GameState.missions.filter(func(m): return m["id"] != 9999)
+	return true
+
+
+## Fly by hand like a person would: look at the GPS every 0.4 s, steer toward
+## the join point / destination with a limited stick rate, press the context
+## button for ENTER and DOCK, and otherwise leave the loop to the GPS.
+func _human_fly(tg: Dictionary) -> String:
+	var p: PlayerShip = main.player
+	var stick := Vector2.ZERO
+	var want := Vector2.ZERO
+	var think := 0.0
+	var t := 0.0
+	GameInput.throttle = 1.0
+	while t < 240.0:
+		await get_tree().physics_frame
+		var dt: float = get_physics_process_delta_time()
+		t += dt
+		if p.mode == PlayerShip.Mode.DOCKING or p.mode == PlayerShip.Mode.DOCKED:
+			return "arrived" if tg["type"] == "station" and p.dock_station.station_id == tg["id"] else "docked at the wrong place"
+		if tg["type"] == "gate" and p.mode == PlayerShip.Mode.FLIGHT and p.can_jump() == main.gates[tg["id"]]:
+			return "arrived"
+		if tg["type"] == "beacon" and p.global_position.distance_to(main.beacon_pos) < 1500.0:
+			return "arrived"
+		think -= dt
+		if think <= 0.0:
+			think = 0.4
+			want = Vector2.ZERO
+			if p.mode == PlayerShip.Mode.FLIGHT:
+				var g: Dictionary = main.gps_info()
+				var aim := Vector3.INF
+				if g.has("join"):
+					aim = g["join"]
+				else:
+					var dt2: Dictionary = main.dest_target()
+					if not dt2.is_empty():
+						aim = dt2["goal"]
+				if aim != Vector3.INF:
+					var local: Vector3 = p.global_transform.basis.inverse() * (aim - p.global_position).normalized()
+					want = Vector2(local.x, local.y) * 3.0
+					if local.z > 0.0:
+						want = Vector2(signf(local.x + 0.01), 0.0)
+					want = want.limit_length(1.0)
+				# press the context button when it offers what we want
+				if tg["type"] == "station" and p.can_dock() == main.stations[tg["id"]]:
+					GameInput.queue_action()
+				elif g.has("join") and p.can_dock() == null and p.can_jump() == null and not p.can_enter_lane().is_empty() and p.global_position.distance_to(g["join"]) < 2500.0:
+					GameInput.queue_action()
+			elif p.mode == PlayerShip.Mode.LANE:
+				var j: Dictionary = p.junction
+				var g2: Dictionary = main.gps_info()
+				# the GPS arms our exit; only step in if it says to take one that isn't armed
+				if not j.is_empty() and j.get("exit", -1) >= 0 and g2.get("junction", -1) == j["node"] and not j["armed"]:
+					GameInput.queue_action()
+				var txt := str(g2.get("text", ""))
+				if g2.get("icon", "") == "exit" and (txt.begins_with("Leave") or txt.begins_with("Drop")) and g2.get("dist", 0.0) < 400.0 and not p.exit_ahead():
+					GameInput.queue_action()
+		stick = stick.move_toward(want, dt * 3.0)
+		GameInput.touch_stick = Vector2(stick.x, -stick.y if Settings.invert_pitch else stick.y)
+	return "timed out at mode %d, %s" % [p.mode, str(main.gps_info().get("text", ""))]
+
+
 func _run() -> void:
 	GameState.reset_game()
 	main.restart_from_save()
@@ -135,7 +458,7 @@ func _run() -> void:
 	var p: PlayerShip = main.player
 	var hunt := {}
 	for m in GameState.missions:
-		if m["kind"] == "hunt" and m["system"] == "tessaly":
+		if m["kind"] == "hunt" and m["system"] == "tessaly" and not m.has("site"):
 			hunt = m
 	if hunt.is_empty():
 		return _fail("no local hunt offered")
@@ -165,6 +488,8 @@ func _run() -> void:
 	var stranded := 0
 	for t in net.tracks:
 		for d in [1, -1]:
+			if t.oneway and d < 0:
+				continue
 			if net.nodes[net.end_node(t, d)]["kind"] != "poi" and net.allowed(t, d).is_empty():
 				stranded += 1
 	print("  dead-end junction approaches: %d" % stranded)
@@ -250,6 +575,158 @@ func _run() -> void:
 		return _fail("hunt not paid")
 	print("docked at ", GameState.last_station, " credits ", GameState.credits)
 
+	# --- 0.11 living economy: prices follow stock, trades move them, events bite
+	var here: String = GameState.last_station
+	var made_g: String = Galaxy.station(here)["makes"][0]
+	var p0 := Economy.buy_price(here, made_g)
+	GameState.credits += 50000
+	var bought := GameState.buy(here, made_g, 12)
+	var p1 := Economy.buy_price(here, made_g)
+	var sold := GameState.sell(here, made_g)
+	print("economy: bought %d %s at %d, price now %d; sold back for %d (profit %d)" % [bought, made_g, p0, p1, sold, GameState.last_profit])
+	if bought <= 0 or p1 <= p0:
+		return _fail("buying did not raise the price")
+	var need: String = Galaxy.station(here)["needs"][0]
+	var n0 := Economy.sell_price(here, need)
+	Economy.start_event("festival", here, need, 300.0)
+	var n1 := Economy.sell_price(here, need)
+	print("economy: festival at %s: %s sells %d -> %d" % [here, need, n0, n1])
+	if n1 <= n0:
+		return _fail("a festival did not raise demand")
+	Economy.step(60.0)
+	GameState.remember_prices(GameState.system_id)
+	var deals: Array = Economy.best_deals(here, GameState.cargo_capacity(), GameState.credits, GameState.price_memory, Economy.clock)
+	print("trade computer: ", deals.slice(0, 2).map(func(d): return "%s -> %s +%d/u" % [d["good"], d["to"], d["profit_unit"]]))
+	if Economy.news.is_empty():
+		return _fail("no news")
+
+	# --- 0.13 people: contracts, bar, factions
+	var offers := GameState.missions.filter(func(m): return m["state"] == "offered" and m.get("from", "") == here)
+	print("contracts at %s: %s" % [here, str(offers.map(func(m): return m["kind"]))])
+	if offers.size() < 3:
+		return _fail("station offers fewer than 3 contracts")
+	var rum := []
+	for i in 3:
+		rum.append(Bar.rumour(here, i)["kind"])
+	print("bar: %s pours; regulars %s; rumours %s" % [Bar.bartender(here)["name"], str(Bar.regulars(here).map(func(r): return r["name"])), str(rum)])
+	main.menu.visible = true
+	main.menu._select("bar")
+	await _wait(0.3)
+	main.menu._do_dice(Button.new(), 50)
+	main.menu._select("missions")
+	var sup := {"id": 8001, "kind": "supply", "state": "active", "good": "water", "units": 5, "station": here, "title": "test supply", "desc": "", "reward": 999, "faction": "haulers"}
+	GameState.missions.append(sup)
+	GameState.cargo["water"] = 7
+	GameState.cargo_cost["water"] = 700
+	var chain := {"id": 8002, "kind": "chain", "state": "active", "station": here, "chain": ["lumen", "halcyon"], "step": 1, "title": "The Parcel (part 1 of 3)", "desc": "", "reward": 500}
+	GameState.missions.append(chain)
+	var cr_b := GameState.credits
+	var notes := GameState.turn_in(here)
+	print("turn in: ", notes)
+	if GameState.cargo.get("water", 0) != 2 or GameState.credits < cr_b + 1499:
+		return _fail("supply / chain contracts did not pay")
+	var next := GameState.missions.filter(func(m): return m["kind"] == "chain" and m["step"] == 2)
+	if next.is_empty() or next[0]["station"] != "lumen":
+		return _fail("chain contract did not continue")
+	GameState.missions.erase(next[0])
+	var fac := Factions.of_station(here)
+	GameState.add_rep(fac, 30)
+	GameState.credits += 20000
+	if not GameState.buy_licence(fac) or not GameState.has_licence(fac):
+		return _fail("could not buy a licence at %d rep" % GameState.get_rep(fac))
+	print("faction: %s %s, licence bought" % [fac, Factions.standing(GameState.get_rep(fac))])
+
+	# --- 0.14 ownership / 0.15 empire
+	GameState.credits += 400000
+	if not Estate.buy(here, "stall"):
+		return _fail("could not buy a market stall")
+	var recs := Estate.recipes_at(here)
+	if not recs.is_empty() and not Estate.buy(here, "factory", recs[0]):
+		return _fail("could not build a factory")
+	var old_ship := GameState.ship
+	if not GameState.buy_ship_keep("otter") or GameState.hangar.size() != 1:
+		return _fail("buy & keep failed")
+	main.player.refresh_ship()
+	if not GameState.switch_ship(int(GameState.hangar[0]["uid"])) or GameState.ship != old_ship:
+		return _fail("switching ships failed")
+	main.player.refresh_ship()
+	var partners: Array = main.menu._route_partners(here)
+	var hire: Dictionary = Estate.pilots_for_hire(here)[0]
+	if partners.is_empty() or not Estate.hire(int(GameState.hangar[0]["uid"]), hire, here, partners[0]):
+		return _fail("could not hire a pilot (partners %s)" % str(partners))
+	var bank0 := GameState.estate_bank
+	for i in 40:
+		Economy.step(20.0)
+	var stall: Dictionary = Estate.props_at(here)[0]
+	print("estate: stall earned %d; %s; fleet: %s" % [int(stall["earned"]), str(Estate.props_at(here).map(func(p): return "%s %s" % [p["kind"], p["status"]])),
+		str(GameState.estate_log.slice(0, 3).map(func(e): return e["text"]))])
+	if int(stall["earned"]) <= 0 or GameState.estate_bank <= bank0:
+		return _fail("estate earned nothing")
+	main.menu._select("estate")
+	await _wait(0.3)
+	main.menu._select("services")
+	await _wait(0.3)
+	# save round trip keeps the estate
+	GameState.save_game("user://simtest_estate.json")
+	var props_n := GameState.props.size()
+	GameState.props = []
+	GameState.hangar = []
+	if not GameState.load_game("user://simtest_estate.json") or GameState.props.size() != props_n or GameState.hangar.size() != 1:
+		return _fail("estate did not survive save/load")
+	print("save v5 round trip: %d props, %d hangar ships; away report: %s" % [GameState.props.size(), GameState.hangar.size(), GameState.away_report])
+	# enemy types and a wanted poster
+	var kinds := []
+	for k in Raider.KINDS:
+		var r := Raider.new()
+		main.world_root.add_child(r)
+		r.setup(main, Vector3(0, 90000, 0), false, k)
+		kinds.append("%s %d hp" % [k, int(r.hp)])
+		r.remove_from_group("enemies")
+		r.queue_free()
+	print("enemy types: ", kinds)
+	var wp := GameState.wanted_poster(here)
+	if wp.is_empty():
+		return _fail("no wanted poster")
+	GameState.accept_poster(wp)
+	print("wanted: %s in %s for %d cr" % [wp["title"], wp["system"], wp["reward"]])
+	GameState.missions.erase(wp)
+	GameState.destination = {}
+
+	# --- 1.0 frontier: the galaxy, the story, a home
+	var open := Galaxy.open_systems()
+	var regions := {}
+	for sid in Galaxy.SYSTEMS:
+		regions[Galaxy.SYSTEMS[sid]["region"]] = true
+		for l in Galaxy.SYSTEMS[sid]["links"]:
+			if not Galaxy.SYSTEMS[l]["links"].has(sid):
+				return _fail("one-way gate link %s -> %s" % [sid, l])
+	for sid in open:
+		if Galaxy.hops("tessaly", sid) > 20:
+			return _fail("%s is unreachable" % sid)
+	print("galaxy: %d systems (%d open) in %d regions, %d stations" % [Galaxy.SYSTEMS.size(), open.size(), regions.size(), Galaxy.all_station_ids().size()])
+	if open.has("quiet_lane") or Galaxy.SYSTEMS.size() < 20:
+		return _fail("the Quiet Lane should start hidden in a 20-system galaxy")
+	GameState.missions = GameState.missions.filter(func(m): return not m.get("story", false))
+	var chapters := []
+	while GameState.story_step < GameState.STORY_DONE:
+		var sm := GameState.story_next()
+		if sm.is_empty():
+			break
+		chapters.append(sm["kind"])
+		sm["state"] = "done"
+		GameState.turn_in(here)
+	print("story: chapters %s, step %d, quiet lane open: %s" % [str(chapters), GameState.story_step, Galaxy.is_open("quiet_lane")])
+	if GameState.story_step != GameState.STORY_DONE or not Galaxy.links("drift").has("quiet_lane"):
+		return _fail("the Lost Lanes story did not finish / open the Quiet Lane")
+	GameState.credits += GameState.HOME_COST + 50000
+	if not GameState.buy_home("rest_tessaly") or not GameState.home_has("observatory"):
+		return _fail("home purchase failed")
+	GameState.hull = 10.0
+	var hn := GameState.on_home_dock("rest_tessaly")
+	if GameState.hull < GameState.max_hull() or hn.size() < 2:
+		return _fail("home dock perks missing")
+	print("home: ", hn)
+
 	# --- workshop + outfit through the menu code paths
 	GameState.parts["scrap"] = 20
 	GameState.parts["circuit"] = 10
@@ -264,7 +741,7 @@ func _run() -> void:
 	GameState.credits += 200000
 	if GameState.buy_gear("tractor") == "":
 		return _fail("buy gear failed")
-	for tab in ["missions", "market", "hangar", "outfit", "workshop", "services"]:
+	for tab in ["missions", "market", "bar", "hangar", "outfit", "workshop", "services"]:
 		main.menu._select(tab)
 		await _wait(0.2)
 	if not await _scroll_test():
@@ -306,144 +783,12 @@ func _run() -> void:
 	if main.cockpit.visible:
 		return _fail("cockpit still visible in 3rd person")
 	print("cockpit ok: ", main.cockpit._built)
-	var road: SpaceLane = null
-	var hwy: SpaceLane = null
-	for t in main.net.tracks:
-		if t.kind == "road" and road == null and t.length > 8000.0:
-			road = t
-		if t.kind == "highway" and hwy == null:
-			hwy = t
-	var s_mid: float = road.length * 0.3
-	var f: Dictionary = road.frame(s_mid)
-	var start: Vector3 = f["origin"] + f["right"] * (road.radius + 120.0)
-	p.global_transform = Transform3D(Basis.looking_at((f["origin"] + f["fwd"] * 2500.0 - start).normalized(), Vector3.UP), start)
-	p._lane_was_inside = false
-	p._merge_cd = 0.0
-	GameInput.throttle = 1.0
-	ok = await _wait_until(func(): return p.mode == PlayerShip.Mode.LANE, 12.0)
-	if not ok:
-		return _fail("did not auto-merge into the road (dist %d)" % int(road.closest(p.global_position)["dist"]))
-	print("auto-merged onto a ", p.lane.kind, ", dir ", p.lane_dir)
-	p.exit_lane()
-
-	# --- highway: ride to the interchange at the end and carry on through it
-	f = hwy.frame(hwy.length - 9000.0)
-	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"])
-	p.enter_lane(1, true, hwy)
-	p.lane_speed = 3000.0
-	GameInput.throttle = 0.6
-	ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane != hwy, 20.0)
-	if not ok or p.mode != PlayerShip.Mode.LANE:
-		return _fail("highway did not carry on through the interchange (mode %d)" % p.mode)
-	print("through ", main.net.node_name(hwy.node_b), " onto a ", p.lane.kind, " to ", main.net.node_name(main.net.end_node(p.lane, p.lane_dir)), " at ", int(p.lane_speed), " m/s")
-	p.exit_lane()
-
-	# --- junctions: no turn sharper than MAX_TURN_DEG, and the lane you hold
-	# picks the branch
-	var worst := 0.0
-	var dead := 0
-	var multi := []
-	for t in main.net.tracks:
-		for d in [1, -1]:
-			var opts: Array = p.junction_options(t, d)
-			for o in opts:
-				if not o.get("stop", false):
-					worst = maxf(worst, absf(o["turn"]))
-			if opts.is_empty():
-				dead += 1
-			var real := opts.filter(func(o): return not o.get("stop", false))
-			if real.size() >= 2:
-				multi.append([t, d])
-	print("junction turns: sharpest %d deg, %d dead ends, %d forks" % [int(worst), dead, multi.size()])
-	if worst > 75.0:   # MAX_TURN_DEG, or the gentlest way on where nothing is in reach
-		return _fail("a junction turn is %d degrees" % int(worst))
-	if multi.is_empty():
-		return _fail("no junction offers a choice")
-	var fork: Array = multi[0]
-	var ft: SpaceLane = fork[0]
-	var fd: int = fork[1]
-	for side in [0, 1]:
-		var opts: Array = p.junction_options(ft, fd)
-		var want: int = 0 if side == 0 else opts.size() - 1
-		if opts[want].get("stop", false):
-			want -= 1
-		var s0: float = ft.length - 2500.0 if fd > 0 else 2500.0
-		f = ft.frame(s0)
-		p.global_transform = Transform3D(Basis.looking_at(f["fwd"] * fd, Vector3.UP), f["origin"])
-		p.enter_lane(fd, true, ft)
-		p.lane = ft
-		p.lane_dir = fd
-		p.lane_s = s0
-		p.lane_speed = 600.0
-		GameInput.throttle = 0.0
-		p.lane_offset = Vector2(p.band_centre(want, opts.size()) * fd, 0.0)
-		ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane != ft, 15.0)
-		var got: bool = p.mode == PlayerShip.Mode.LANE and p.lane == opts[want]["track"]
-		print("lane %d of %d at %s (turn %d deg): %s" % [want + 1, opts.size(), main.net.node_name(main.net.end_node(ft, fd)), int(opts[want]["turn"]), "took it" if got else "missed"])
-		if not got:
-			return _fail("holding a lane did not pick its branch")
-		p.exit_lane()
-
-	# --- GPS: with a destination set it tells you what to do, on and off the roads
-	var far_id := ""
-	var far_d := 0.0
-	for sid in main.stations:
-		var dd: float = (main.stations[sid] as Node3D).global_position.distance_to(p.global_position)
-		if dd > far_d:
-			far_d = dd
-			far_id = sid
-	GameState.set_destination("station", far_id)
-	await _wait(0.6)
-	var gi: Dictionary = main.gps_info()
-	print("gps (flight): ", gi.get("text", "-"), " / ", gi.get("then", ""))
-	if gi.is_empty():
-		await _wait(0.6)
-		gi = main.gps_info()
-		print("gps (flight): ", gi.get("text", "-"), " / ", gi.get("then", ""))
-	if gi.is_empty():
-		return _fail("GPS gave no directions")
-	if not main.gps["rides"].is_empty():
-		var r0: Dictionary = main.gps["rides"][0]
-		var gt: SpaceLane = r0["track"]
-		f = gt.frame(float(r0["enter_s"]))
-		p.global_transform = Transform3D(Basis.looking_at(f["fwd"] * int(r0["dir"]), Vector3.UP), f["origin"])
-		p.enter_lane(r0["dir"], true, gt)
-		await _wait(0.8)
-		gi = main.gps_info()
-		print("gps (on the %s): %s, %s / %s" % [gt.kind, gi.get("text", "-"), Hud._fmt_dist(gi.get("dist", 0.0)), gi.get("then", "")])
-		if gi.is_empty():
-			return _fail("GPS gave no directions on the road")
-		# the arrow must agree with the words
-		var txt: String = gi.get("text", "")
-		if (txt.begins_with("Keep LEFT") or txt.begins_with("Bear left")) and gi["icon"] != "left":
-			return _fail("GPS says '%s' but shows a %s arrow" % [txt, gi["icon"]])
-		if (txt.begins_with("Keep RIGHT:") or txt.begins_with("Bear right")) and gi["icon"] != "right":
-			return _fail("GPS says '%s' but shows a %s arrow" % [txt, gi["icon"]])
-		p.exit_lane()
-	GameState.destination = {}
-
-	# --- turns: since 0.9.0 even the sharpest road bend can be flown flat out
-	# on boost with no steering at all (wide tubes, gentle curves)
-	var sharp := 0.0
-	var sharp_s := 0.0
-	for i in int(road.length / 50.0):
-		var k: float = road.curvature(i * 50.0).z
-		if k > sharp:
-			sharp = k
-			sharp_s = i * 50.0
-	f = road.frame(maxf(sharp_s - 1500.0, 0.0))
-	p.global_transform = Transform3D(Basis.looking_at(f["fwd"], Vector3.UP), f["origin"])
-	p.enter_lane(1, true, road)
-	p.lane_offset = Vector2.ZERO
-	p.lane_speed = 1250.0
-	GameInput.touch_boost = true
-	ok = await _wait_until(func(): return p.mode != PlayerShip.Mode.LANE or p.lane != road or p.lane_s > sharp_s + 1500.0, 12.0)
-	GameInput.touch_boost = false
-	print("boosting blind through a %d m bend: %s" % [int(1.0 / sharp), "thrown off" if p.mode == PlayerShip.Mode.FLIGHT else "held on"])
-	if p.mode != PlayerShip.Mode.LANE:
-		return _fail("thrown off a road by its sharpest bend while boosting")
-	print("  sideways offset after the bend: %d m of %d" % [int(p.lane_offset.length()), int(road.radius)])
-	p.exit_lane()
+	if not await _loop_tests():
+		return
+	if not await _road_tests():
+		return
+	if not await _all_systems():
+		return
 
 	# --- boost punch: from cruise, one second of boost nearly doubles the speed
 	p.boost_energy = 1.0

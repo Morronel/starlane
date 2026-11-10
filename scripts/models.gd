@@ -61,11 +61,56 @@ static func ship(id: String) -> ArrayMesh:
 			return _corsair()
 		"seraph":
 			return _seraph()
+	if Items.SHIPS.has(id) and Items.SHIPS[id].has("look"):
+		return _custom(Items.SHIPS[id]["look"])
 	return player_ship()
+
+
+## 0.14: parametric hull for the newer ships (see "look" in Items.SHIPS).
+static func _custom(k: Dictionary) -> ArrayMesh:
+	var b := MeshBuilder.new()
+	var L: float = k["len"]
+	var w: float = k["w"]
+	var h: float = k["h"]
+	var body: Color = k["body"]
+	var trim: Color = k["trim"]
+	var glow: Color = k["glow"]
+	var boxy: bool = k.get("boxy", false)
+	var nose := -L * 0.5
+	var tail := L * 0.5
+	if boxy:
+		b.loft("hull", [Vector4(nose, w * 0.35, h * 0.3, 0.0), Vector4(nose + L * 0.12, w * 0.85, h * 0.8, 0.05),
+			Vector4(nose + L * 0.3, w, h, 0.0), Vector4(tail - L * 0.15, w, h, 0.0), Vector4(tail, w * 0.8, h * 0.85, 0.0)], 4, body, trim, 0.0, PI * 0.25)
+		# cargo containers along the spine
+		var n := int(L / 4.0)
+		for i in n:
+			var z := nose + L * 0.32 + i * (L * 0.5 / maxf(n, 1))
+			b.box("hull", Vector3(0, h * 0.95, z), Vector3(w * 1.2, h * 0.5, L * 0.5 / maxf(n, 1) * 0.85), trim if i % 2 else body.darkened(0.15))
+	else:
+		b.loft("hull", [Vector4(nose, 0.05, 0.05, 0.0), Vector4(nose + L * 0.25, w * 0.55, h * 0.45, 0.05),
+			Vector4(nose + L * 0.55, w, h * 0.6, 0.08), Vector4(tail - L * 0.1, w * 0.85, h * 0.55, 0.05), Vector4(tail, w * 0.6, h * 0.4, 0.0)], 8, body, trim)
+	b.loft("dim", [Vector4(nose + L * 0.12, 0.05, 0.05, h * 0.35), Vector4(nose + L * 0.2, w * 0.35, h * 0.3, h * 0.45), Vector4(nose + L * 0.32, w * 0.3, h * 0.28, h * 0.45), Vector4(nose + L * 0.38, 0.05, 0.05, h * 0.35)], 6, glow.darkened(0.6))
+	var span: float = k["wing"]
+	if span > 0.0:
+		for sx in [-1.0, 1.0]:
+			b.slab("hull", [Vector2(w * 0.8 * sx, nose + L * 0.45), Vector2((w + span) * sx, tail - L * 0.2), Vector2((w + span) * sx, tail - L * 0.08), Vector2(w * 0.8 * sx, tail - L * 0.1)], 0.0, 0.16, body, trim)
+			b.box("glow", Vector3((w + span * 0.6) * sx, 0.1, tail - L * 0.18), Vector3(span * 0.6, 0.04, 0.1), glow)
+			if k.get("fins", false):
+				b.slab("hull", [Vector2((w + span) * sx, tail - L * 0.2), Vector2((w + span) * sx, tail - L * 0.06), Vector2((w + span) * sx + 0.02 * sx, tail - L * 0.06)], 0.0, 0.1, trim)
+				b.box("hull", Vector3((w + span) * sx, 0.5, tail - L * 0.12), Vector3(0.12, 1.0, L * 0.12), trim, Basis(Vector3.RIGHT, -0.4))
+	var pods: int = k["pods"]
+	for i in pods:
+		var x := 0.0 if pods % 2 == 1 and i == pods / 2 else (float(i) - (pods - 1) * 0.5) * w * 0.9
+		var y := -h * 0.1 if pods > 2 and absf(x) < 0.1 else 0.0
+		b.cyl("hull", Vector3(x, y, tail - L * 0.22), Vector3(x, y, tail + 0.4), w * 0.28, w * 0.34, 8, trim)
+		b.cyl("glow", Vector3(x, y, tail + 0.42), Vector3(x, y, tail + 0.5), w * 0.26, w * 0.26, 8, glow)
+	return b.build(MeshBuilder.default_materials())
 
 
 ## Rough size relative to the Sparrow (camera distance, collision).
 static func ship_size(id: String) -> float:
+	if Items.SHIPS.has(id) and Items.SHIPS[id].has("size"):
+		return float(Items.SHIPS[id]["size"])
 	return {"sparrow": 1.0, "wren": 1.05, "kestrel": 1.1, "mule": 1.65, "corsair": 1.45, "seraph": 1.25}.get(id, 1.0)
 
 
@@ -82,6 +127,11 @@ static func hardpoints(id: String) -> Array:
 			return [Vector3(-3.8, 0.4, -6.4), Vector3(3.8, 0.4, -6.4), Vector3(-2.2, -0.6, -7.2), Vector3(2.2, -0.6, -7.2)]
 		"seraph":
 			return [Vector3(-3.2, 0, -4.4), Vector3(3.2, 0, -4.4), Vector3(-1.2, -0.3, -6.4), Vector3(1.2, -0.3, -6.4)]
+	if Items.SHIPS.has(id) and Items.SHIPS[id].has("look"):
+		var lk: Dictionary = Items.SHIPS[id]["look"]
+		var L: float = lk["len"]
+		var w: float = lk["w"]
+		return [Vector3(-w * 0.9, 0, -L * 0.3), Vector3(w * 0.9, 0, -L * 0.3), Vector3(0, -lk["h"] * 0.5, -L * 0.45)]
 	return [Vector3(-1.6, 0, -3.0), Vector3(1.6, 0, -3.0)]
 
 

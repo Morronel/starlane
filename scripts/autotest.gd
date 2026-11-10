@@ -68,7 +68,7 @@ func _run() -> void:
 	main.restart_from_save(true)
 	await _wait(1.5)
 	for m in GameState.missions:
-		if m["kind"] == "hunt" and m["system"] == "tessaly":
+		if m["kind"] == "hunt" and m["system"] == "tessaly" and not m.has("site"):
 			GameState.accept(m)
 	main.menu._select("missions")
 	await _wait(0.8)
@@ -89,6 +89,9 @@ func _run() -> void:
 	main.menu._select("workshop")
 	await _wait(0.8)
 	await _shot("05_workshop")
+	main.menu._select("bar")
+	await _wait(0.8)
+	await _shot("05b_bar")
 
 	# buy a gunship for the flight shots
 	GameState.ship = "corsair"

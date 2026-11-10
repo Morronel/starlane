@@ -20,6 +20,15 @@ var _last_fire_tap := -10000
 signal map_tapped
 signal settings_tapped
 signal autopilot_tapped
+signal radio_tapped
+signal photo_tapped
+signal action2_tapped
+
+var action2_label := ""        # 0.12: event offers and the cruise drive
+var action2_color := Color(0.55, 1.0, 0.75)
+var photo_ready := false
+var radio_name := ""
+var _action2_flash := 0.0
 
 var autopilot_on := false
 var autopilot_ready := false
@@ -45,6 +54,9 @@ func _map_rect() -> Rect2: return Rect2(size.x * 0.5 - 214, 12, 120, 50)
 func _auto_rect() -> Rect2: return Rect2(size.x * 0.5 - 82, 12, 164, 50)
 func _gear_rect() -> Rect2: return Rect2(size.x * 0.5 + 94, 12, 120, 50)
 func _missile_c() -> Vector2: return Vector2(size.x - 305, size.y - 236)
+func _action2_rect() -> Rect2: return Rect2(size.x - 330, size.y * 0.36 + 86, 250, 58)
+func _radio_rect() -> Rect2: return Rect2(size.x * 0.5 - 346, 12, 120, 50)
+func _photo_rect() -> Rect2: return Rect2(size.x * 0.5 + 226, 12, 120, 50)
 
 
 func _input(event: InputEvent) -> void:
@@ -57,6 +69,13 @@ func _input(event: InputEvent) -> void:
 			if _action_rect().has_point(p) and action_label != "":
 				GameInput.queue_action()
 				_action_flash = 1.0
+			elif _action2_rect().has_point(p) and action2_label != "":
+				action2_tapped.emit()
+				_action2_flash = 1.0
+			elif _radio_rect().has_point(p):
+				radio_tapped.emit()
+			elif _photo_rect().has_point(p):
+				photo_tapped.emit()
 			elif _map_rect().has_point(p):
 				map_tapped.emit()
 			elif _auto_rect().has_point(p):
@@ -144,6 +163,7 @@ func reset() -> void:
 func _process(delta: float) -> void:
 	_action_flash = maxf(0.0, _action_flash - delta * 3.0)
 	_missile_flash = maxf(0.0, _missile_flash - delta * 3.0)
+	_action2_flash = maxf(0.0, _action2_flash - delta * 3.0)
 	queue_redraw()
 
 
@@ -204,6 +224,29 @@ func _draw() -> void:
 		UiKit.icon(self, item[1], r.get_center() - Vector2(22 if item[2] != "" else 0, 0), 30, ACCENT, 2.0)
 		if item[2] != "":
 			_text(font, r.get_center() + Vector2(18, 0), item[2], 16, Color(1, 1, 1, 0.85))
+	# radio + camera
+	var rr := _radio_rect()
+	draw_rect(rr, Color(0.03, 0.06, 0.1, 0.55))
+	draw_rect(rr, line, false, 1.5)
+	_text(font, rr.get_center() + Vector2(0, -7), "RADIO", 15, Color(1, 1, 1, 0.85))
+	_text(UiKit.body(500), rr.get_center() + Vector2(0, 12), radio_name, 11, Color(ACCENT, 0.8))
+	var pr := _photo_rect()
+	var ppulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.008)
+	var pcol := Color(1.0, 0.85, 0.45)
+	draw_rect(pr, Color(pcol, 0.15 + ppulse * 0.2) if photo_ready else Color(0.03, 0.06, 0.1, 0.55))
+	draw_rect(pr, Color(pcol, 0.9) if photo_ready else line, false, 2.5 if photo_ready else 1.5)
+	# a little camera glyph
+	var cc := pr.get_center() + Vector2(-30, 0)
+	draw_rect(Rect2(cc - Vector2(13, 8), Vector2(26, 17)), Color(pcol if photo_ready else ACCENT, 0.9), false, 2.0)
+	draw_arc(cc + Vector2(0, 1), 5, 0, TAU, 16, Color(pcol if photo_ready else ACCENT, 0.9), 2.0, true)
+	_text(font, pr.get_center() + Vector2(16, 0), "PHOTO", 15, Color(1, 1, 1, 0.95 if photo_ready else 0.6))
+	# second context button (event offers / cruise)
+	if action2_label != "":
+		var a2 := _action2_rect()
+		var pulse3 := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.005)
+		draw_rect(a2, Color(action2_color, 0.16 + pulse3 * 0.1 + _action2_flash * 0.4))
+		draw_rect(a2, Color(action2_color, 0.85), false, 2.5)
+		_text(font, a2.get_center(), action2_label, 20, Color(1, 1, 1))
 	# boost
 	var bc := _boost_c()
 	draw_circle(bc, 52, Color(ACCENT, 0.35 if _boost_touch >= 0 else 0.15))

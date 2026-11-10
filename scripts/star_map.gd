@@ -123,7 +123,7 @@ func _gui_input(event: InputEvent) -> void:
 				_set_dest("station", st.station_id)
 				return
 		return
-	for sid in Galaxy.SYSTEMS:
+	for sid in Galaxy.open_systems():
 		if _gal_pos(sid).distance_to(pos) < 46.0:
 			selected = sid
 			world.sfx.ui("tab")
@@ -135,7 +135,7 @@ func _gal_pos(sid: String) -> Vector2:
 	var r := _map_rect()
 	var mn := Vector2(INF, INF)
 	var mx := Vector2(-INF, -INF)
-	for k in Galaxy.SYSTEMS:
+	for k in Galaxy.open_systems():
 		var p: Vector2 = Galaxy.SYSTEMS[k]["map"]
 		mn = mn.min(p)
 		mx = mx.max(p)
@@ -299,12 +299,25 @@ func _draw_galaxy() -> void:
 	var cur: String = GameState.system_id
 	var font := UiKit.display(700)
 	var reach := {}
-	for sid in Galaxy.SYSTEMS:
+	for sid in Galaxy.open_systems():
 		reach[sid] = Galaxy.hops(cur, sid)
+	# 1.0 regions, faintly behind everything
+	var regions := {}
+	for sid in Galaxy.open_systems():
+		var rg: String = Galaxy.SYSTEMS[sid].get("region", "")
+		if not regions.has(rg):
+			regions[rg] = []
+		regions[rg].append(_gal_pos(sid))
+	for rg in regions:
+		var c := Vector2.ZERO
+		for q in regions[rg]:
+			c += q
+		c /= float(regions[rg].size())
+		UiKit.text_c(self, UiKit.display(800, 8), c + Vector2(0, -6), rg.to_upper(), 22, Color(0.6, 0.75, 1.0, 0.13), false)
 	# links
 	var drawn := {}
-	for sid in Galaxy.SYSTEMS:
-		for l in Galaxy.SYSTEMS[sid]["links"]:
+	for sid in Galaxy.open_systems():
+		for l in Galaxy.links(sid):
 			var key: String = sid + l if sid < l else l + sid
 			if drawn.has(key):
 				continue
@@ -323,28 +336,28 @@ func _draw_galaxy() -> void:
 		for i in range(route.size() - 1):
 			draw_line(_gal_pos(route[i]), _gal_pos(route[i + 1]), Color(UiKit.GOOD if ok else UiKit.BAD, 0.85), 5.0, true)
 	# systems
-	for sid in Galaxy.SYSTEMS:
+	for sid in Galaxy.open_systems():
 		var p := _gal_pos(sid)
 		var sysd: Dictionary = Galaxy.SYSTEMS[sid]
 		var sky: Dictionary = sysd["sky"]
 		var col: Color = (sky["c"] as Color).lerp(sky["sun_col"], 0.5)
 		var glow := 0.5 + 0.5 * sin(_t * 2.0 + p.x)
 		for i in 4:
-			draw_circle(p, 34.0 - i * 6.0, Color(col, 0.05 + i * 0.03))
-		draw_circle(p, 12.0, col.lightened(0.3))
+			draw_circle(p, 22.0 - i * 4.0, Color(col, 0.05 + i * 0.03))
+		draw_circle(p, 8.0, col.lightened(0.3))
 		if sid == cur:
-			draw_arc(p, 26.0 + glow * 4.0, 0, TAU, 40, Color(UiKit.GOOD, 0.9), 2.5, true)
+			draw_arc(p, 17.0 + glow * 3.0, 0, TAU, 40, Color(UiKit.GOOD, 0.9), 2.5, true)
 		if sid == selected:
-			draw_arc(p, 38.0, _t, _t + PI * 1.5, 40, Color(1, 1, 1, 0.9), 2.0, true)
+			draw_arc(p, 25.0, _t, _t + PI * 1.5, 40, Color(1, 1, 1, 0.9), 2.0, true)
 		var label: String = sysd["name"].to_upper()
-		UiKit.text_c(self, font, p + Vector2(0, 52), label, 17, Color(1, 1, 1, 0.92))
+		UiKit.text_c(self, font, p + Vector2(0, 32), label, 13, Color(1, 1, 1, 0.92))
 		var sub := "%d HOP%s" % [reach[sid], "" if reach[sid] == 1 else "S"] if sid != cur else "YOU ARE HERE"
-		UiKit.text_c(self, UiKit.body(600), p + Vector2(0, 74), sub, 14, Color(UiKit.TEXT_DIM, 0.9))
+		UiKit.text_c(self, UiKit.body(600), p + Vector2(0, 47), sub, 11, Color(UiKit.TEXT_DIM, 0.9))
 		# threat pips
 		for k in int(sysd["threat"]):
-			draw_rect(Rect2(p + Vector2(-14 + k * 10, -40), Vector2(7, 7)), Color(UiKit.BAD, 0.85))
+			draw_rect(Rect2(p + Vector2(-12 + k * 9, -28), Vector2(6, 6)), Color(UiKit.BAD, 0.85))
 		if not _mission_notes(sid).is_empty():
-			UiKit.icon(self, "target", p + Vector2(30, -26), 18, UiKit.GOLD, 1.6)
+			UiKit.icon(self, "target", p + Vector2(22, -18), 15, UiKit.GOLD, 1.6)
 
 
 var _sys_ctr := Vector2.ZERO
@@ -424,6 +437,16 @@ func _draw_system() -> void:
 					UiKit.text_c(self, UiKit.body(600), np + Vector2(0, -20), nd["name"].replace(" Interchange", ""), 13, Color(1.0, 0.86, 0.55, 0.85))
 				"cross":
 					draw_circle(np, 4.5, Color(0.6, 0.9, 1.0))
+				"merge":
+					pass
+				"exit":
+					# numbered exit badge, motorway green, pushed outward off the loop
+					var no: String = nd["name"].replace("Exit ", "")
+					var dir2: Vector2 = (np - to2d.call(Vector3.ZERO)).normalized()
+					var bp: Vector2 = np + dir2 * 16.0
+					draw_rect(Rect2(bp - Vector2(11, 9), Vector2(22, 18)), Color(0.1, 0.45, 0.25, 0.95))
+					draw_rect(Rect2(bp - Vector2(11, 9), Vector2(22, 18)), Color(1, 1, 1, 0.8), false, 1.5)
+					UiKit.text_c(self, UiKit.display(800), bp + Vector2(0, 5), no, 12, Color(1, 1, 1), false)
 				_:
 					draw_arc(np, 7, 0, TAU, 18, Color(0.75, 0.6, 1.0), 2.0, true)
 					if nd["name"] == "Beacon":
