@@ -186,7 +186,7 @@ func _rebuild_dest_list(view_sys: String) -> void:
 		_dest_button(t, on, _set_dest.bind("mission", m["id"]))
 	for st in Galaxy.SYSTEMS[view_sys]["stations"]:
 		var on2: bool = d.get("type", "") == "station" and d["id"] == st["id"]
-		_dest_button("Station: " + st["name"], on2, _set_dest.bind("station", st["id"]))
+		_dest_button("Station: " + st["name"] + ("  ·  shipyard" if not st.get("ships", []).is_empty() else ""), on2, _set_dest.bind("station", st["id"]))
 	if not d.is_empty():
 		var clr := UiKit.button("CLEAR DESTINATION", Vector2(0, 44), 14)
 		clr.pressed.connect(func():
@@ -463,6 +463,8 @@ func _draw_system() -> void:
 		var c: Color = st.accent
 		draw_colored_polygon(PackedVector2Array([sp + Vector2(0, -12), sp + Vector2(12, 0), sp + Vector2(0, 12), sp + Vector2(-12, 0)]), Color(c, 0.85))
 		UiKit.text_c(self, UiKit.display(700), sp + Vector2(0, 30), st.display_name.to_upper(), 15, c)
+		if not Galaxy.station(st.station_id).get("ships", []).is_empty():
+			UiKit.text_c(self, UiKit.display(700), sp + Vector2(0, 47), "SHIPYARD", 12, UiKit.GOLD)
 	# destination
 	var dt: Dictionary = world.dest_target()
 	if not dt.is_empty():

@@ -236,7 +236,7 @@ func buy_price(station: String, item: String) -> int:
 func buy(station: String, item: String, units: int) -> int:
 	var got := 0
 	var paid := 0
-	while got < units and cargo_used() < cargo_capacity() and Economy.available(station, item) > 0:
+	while got < units and cargo_used() + got < cargo_capacity() and Economy.available(station, item) > 0:
 		var p := Economy.buy_price(station, item)
 		if credits - paid < p:
 			break
@@ -263,10 +263,13 @@ func sell(station: String, item: String, units := 9999) -> int:
 	if units <= 0 or not Economy.trades_here(station, item):
 		return 0
 	var total := 0
+	var bonus := sell_bonus(station, item)
 	for i in units:
-		total += Economy.sell_price(station, item)
+		# licence perks sweeten the price, but a station never pays more for a
+		# unit than it would charge you to buy that same unit back
+		var quote := Economy.sell_price(station, item)
 		Economy.on_sold(station, item, 1)
-	total = int(round(total * sell_bonus(station, item)))
+		total += mini(int(round(quote * bonus)), Economy.buy_price(station, item) - 1)
 	var cost_each: float = float(cargo_cost.get(item, 0)) / maxf(have, 1)
 	var cost := int(round(cost_each * units))
 	last_profit = total - cost
@@ -421,6 +424,9 @@ func uninstall(slot: String, index: int) -> bool:
 	if index >= arr.size() or arr[index] == "":
 		return false
 	var gear_id: String = arr[index]
+	# a cargo pod full of goods can't come off: the goods would have nowhere to go
+	if cargo_used() > cargo_capacity() - int(Items.GEAR[gear_id].get("cargo", 0)):
+		return false
 	arr[index] = ""
 	storage.append(gear_id)
 	hull = minf(hull, max_hull())

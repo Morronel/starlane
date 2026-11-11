@@ -1031,7 +1031,7 @@ func _trade_computer(here: String) -> void:
 	c[1].add_child(v)
 	v.add_child(_label("TRADE COMPUTER", 17, UiKit.GOOD, UiKit.display(700, 2)))
 	if space <= 0:
-		v.add_child(_label("Your hold is full. Sell first, or find a buyer below.", 15, UiKit.TEXT_DIM, UiKit.body(500)))
+		_sell_finder(v, here)
 		return
 	if deals.is_empty():
 		v.add_child(_label("No profitable run from here with the prices you know. Visit more stations to learn their prices.", 15, UiKit.TEXT_DIM, UiKit.body(500), true))
@@ -1048,6 +1048,40 @@ func _trade_computer(here: String) -> void:
 		var age_txt := "live prices" if age < 60.0 else "prices %d min old" % int(age / 60.0)
 		t.add_child(_label("+%s per unit  ·  about +%s cr for %d units  ·  %s" % [_fmt(d["profit_unit"]), _fmt(d["profit"]), d["units"], age_txt], 14,
 			UiKit.GOLD if age < 600.0 else UiKit.TEXT_DIM, UiKit.body(600)))
+		row.add_child(t)
+		var to: String = d["to"]
+		_btn(row, "SET COURSE", func(b):
+			GameState.set_destination("station", to)
+			world.sfx.ui("tab")
+			GameState.message.emit("Course set: " + Galaxy.station_name(to), UiKit.GOOD)
+			UiKit.pop(b), false, 150)
+		v.add_child(row)
+
+
+## Hold full: where the goods you carry sell well, with a course button.
+func _sell_finder(v: VBoxContainer, here: String) -> void:
+	var spots: Array = Economy.sell_spots(here, GameState.cargo, GameState.cargo_cost, GameState.price_memory, Economy.clock)
+	var worth_here := GameState.hold_value_at(here)
+	if spots.is_empty():
+		v.add_child(_label("Your hold is full. You don't know anyone else's prices for these goods yet: visit more stations to learn them.", 15, UiKit.TEXT_DIM, UiKit.body(500), true))
+		return
+	v.add_child(_label("Your hold is full. Best places to sell what you carry%s:" % ("" if worth_here <= 0 else " (worth %s cr here)" % _fmt(worth_here)), 15, UiKit.TEXT_DIM, UiKit.body(500), true))
+	for d in spots.slice(0, 3):
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		var t := VBoxContainer.new()
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var hop_txt := "same system" if d["hops"] == 0 else "%d jump%s" % [d["hops"], "" if d["hops"] == 1 else "s"]
+		t.add_child(_label("%s  (%s)" % [Galaxy.station_name(d["to"]), hop_txt], 16, Color(1, 1, 1), UiKit.body(700)))
+		var parts := []
+		for gl in (d["goods"] as Array).slice(0, 3):
+			parts.append("%s %s cr" % [Economy.good_name(gl["good"]), _fmt(gl["price"])])
+		var age: float = d["age"]
+		var age_txt := "live prices" if age < 60.0 else "prices %d min old" % int(age / 60.0)
+		var pr: int = d["profit"]
+		t.add_child(_label("%s  ·  about %s cr%s  ·  %s" % [", ".join(parts), _fmt(d["value"]),
+			"" if pr == 0 else "  (%s%s)" % ["+" if pr > 0 else "-", _fmt(absi(pr))], age_txt], 14,
+			UiKit.GOLD if pr >= 0 else UiKit.BAD, UiKit.body(600), true))
 		row.add_child(t)
 		var to: String = d["to"]
 		_btn(row, "SET COURSE", func(b):
@@ -1253,19 +1287,14 @@ func _build_hangar() -> void:
 	stats.add_child(_label(ins["desc"], 15, UiKit.TEXT_DIM, UiKit.body(500), true))
 	_stat_row(stats, "HULL", "%d" % ins["hull"], 0.0 if mine else float(ins["hull"] - cur["hull"]))
 	_stat_row(stats, "TOP SPEED", "%d m/s" % ins["speed"], 0.0 if mine else float(ins["speed"] - cur["speed"]))
-	_stat_row(stats, "CARGO", "%d" % ins["cargo"], 0.0 if mine else float(ins["cargo"] - cur["cargo"]))
+	var pods := GameState.cargo_capacity() - int(cur["cargo"])
+	_stat_row(stats, "CARGO", ("%d  (+%d pods)" % [ins["cargo"], pods]) if mine and pods > 0 else "%d" % ins["cargo"], 0.0 if mine else float(ins["cargo"] - cur["cargo"]))
 	_stat_row(stats, "HANDLING", "%d%%" % int(ins["turn"] * 100), 0.0 if mine else (ins["turn"] - cur["turn"]) * 100.0)
 	stats.add_child(_label(_slots_text(ins), 15, UiKit.GOLD, UiKit.body(600)))
 	h.add_child(stats)
 
 	if stock.is_empty():
-		var c2 := _card(UiKit.TEXT_DIM)
-		var yards := []
-		for sid in Galaxy.SYSTEMS:
-			for st in Galaxy.SYSTEMS[sid]["stations"]:
-				if st.has("ships"):
-					yards.append("%s (%s)" % [st["name"], Galaxy.SYSTEMS[sid]["name"]])
-		_text_block(c2[1], "NO SHIPYARD HERE", "Ships are sold at: " + ", ".join(yards) + ".")
+		_shipyard_finder()
 		return
 	_content.add_child(_label("SHIPS FOR SALE", 18, UiKit.ACCENT, UiKit.display(700, 2)))
 	for id in stock:
@@ -1292,6 +1321,56 @@ func _build_hangar() -> void:
 			continue
 		_btn(ch, ("TRADE IN\n%s" % _fmt(net)) if net > 0 else ("SWAP\n+%s" % _fmt(-net)), _do_buy_ship.bind(id), false, 150).custom_minimum_size.y = 64
 		_btn(ch, "BUY & KEEP\n%s" % _fmt(info["price"]), _do_buy_keep.bind(id), GameState.credits < int(info["price"]), 150).custom_minimum_size.y = 64
+
+
+## No shipyard here: the shipyards in this system, each with a course button.
+## If this system has none, the nearest ones a jump or two away.
+func _shipyard_finder() -> void:
+	var here_sys := Galaxy.system_of(station.station_id)
+	var yards := []
+	for st in Galaxy.SYSTEMS[here_sys]["stations"]:
+		if not st.get("ships", []).is_empty() and st["id"] != station.station_id:
+			yards.append({"id": st["id"], "hops": 0})
+	var title := "SHIPYARDS IN %s" % Galaxy.SYSTEMS[here_sys]["name"].to_upper()
+	var note := "No ships for sale at this station. These shipyards are in this system:"
+	if yards.is_empty():
+		var best := 99
+		for sid in Galaxy.SYSTEMS:
+			if not GameState.visited.has(sid) and Galaxy.SYSTEMS[sid].get("hidden", false):
+				continue
+			var h := Galaxy.hops(here_sys, sid)
+			if h <= 0 or h > best:
+				continue
+			for st in Galaxy.SYSTEMS[sid]["stations"]:
+				if not st.get("ships", []).is_empty():
+					if h < best:
+						best = h
+						yards.clear()
+					yards.append({"id": st["id"], "hops": h})
+		title = "NEAREST SHIPYARDS"
+		note = "No shipyard in this system. The closest ones are %d jump%s away:" % [best, "" if best == 1 else "s"]
+	_content.add_child(_label(title, 18, UiKit.ACCENT, UiKit.display(700, 2)))
+	_content.add_child(_label(note, 15, UiKit.TEXT_DIM, UiKit.body(500), true))
+	for y in yards:
+		var sid: String = y["id"]
+		var info := Galaxy.station(sid)
+		var on: bool = GameState.destination.get("type", "") == "station" and GameState.destination.get("id", "") == sid
+		var card := _card(UiKit.GOLD)
+		var ch: HBoxContainer = card[1]
+		var ic := Control.new()
+		ic.custom_minimum_size = Vector2(48, 48)
+		ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ic.draw.connect(func(): UiKit.icon(ic, "ship", Vector2(24, 24), 40, UiKit.GOLD, 2.2))
+		ch.add_child(ic)
+		var names: Array = info.get("ships", []).map(func(i): return Items.SHIPS[i]["name"])
+		var where: String = "this system" if y["hops"] == 0 else "%s, %d jump%s" % [Galaxy.SYSTEMS[Galaxy.system_of(sid)]["name"], y["hops"], "" if y["hops"] == 1 else "s"]
+		_text_block(ch, "%s  ·  %s" % [Galaxy.station_name(sid).to_upper(), where], "Sells: " + ", ".join(names))
+		_btn(ch, "COURSE SET" if on else "SET COURSE", func(b):
+			GameState.set_destination("station", sid)
+			world.sfx.ui("tab")
+			GameState.message.emit("Course set: " + Galaxy.station_name(sid), UiKit.GOOD)
+			UiKit.pop(b)
+			_rebuild_keep_scroll.call_deferred(), on, 150)
 
 
 func _do_buy_keep(b: Button, id: String) -> void:
@@ -1431,6 +1510,8 @@ func _do_uninstall(b: Control, slot: String, i: int) -> void:
 		_rebuild_keep_scroll.call_deferred()
 	else:
 		_deny(b)
+		if Items.GEAR[GameState.equip[slot][i]].has("cargo"):
+			GameState.message.emit("That pod is full of cargo. Sell some goods first.", UiKit.BAD)
 
 
 func _do_install(b: Control, i: int) -> void:

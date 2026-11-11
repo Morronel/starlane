@@ -586,6 +586,51 @@ func _run() -> void:
 	print("economy: bought %d %s at %d, price now %d; sold back for %d (profit %d)" % [bought, made_g, p0, p1, sold, GameState.last_profit])
 	if bought <= 0 or p1 <= p0:
 		return _fail("buying did not raise the price")
+	# buying and selling straight back must never pay, licences or not
+	GameState.cargo.clear()
+	GameState.cargo_cost.clear()
+	for lic in [{}, {"haulers": true, "comet": true}]:
+		GameState.licences = lic
+		for g in Economy.traded(here):
+			for n in [1, 5, 999]:
+				var cr0 := GameState.credits
+				if GameState.buy(here, g, n) <= 0:
+					continue
+				GameState.sell(here, g)
+				if GameState.credits >= cr0:
+					return _fail("buy %d %s and sell straight back made %d cr" % [n, g, GameState.credits - cr0])
+	GameState.licences = {}
+	print("economy: no buy-and-resell profit on %d goods" % Economy.traded(here).size())
+	# the hold holds what it says, and a full cargo pod can't come off
+	var pod_slot := GameState.free_slot("utility")
+	if pod_slot < 0:
+		GameState.equip["utility"][0] = ""
+	GameState.buy_gear("cargo_1")
+	for g in Economy.traded(here):
+		GameState.buy(here, g, 9999)
+	if GameState.cargo_used() != GameState.cargo_capacity():
+		return _fail("hold holds %d of %d" % [GameState.cargo_used(), GameState.cargo_capacity()])
+	var pi: int = GameState.equip["utility"].find("cargo_1")
+	if GameState.uninstall("utility", pi) or GameState.cargo_used() > GameState.cargo_capacity():
+		return _fail("took a full cargo pod off")
+	GameState.remember_prices(GameState.system_id)
+	var spots: Array = Economy.sell_spots(here, GameState.cargo, GameState.cargo_cost, GameState.price_memory, Economy.clock)
+	print("full hold %d/%d; best sell spots: %s" % [GameState.cargo_used(), GameState.cargo_capacity(), str(spots.slice(0, 3).map(func(d): return "%s %d cr" % [d["to"], d["value"]]))])
+	if spots.is_empty():
+		return _fail("no sell spots for a full hold")
+	main.menu.visible = true
+	main.menu._select("market")
+	await _wait(0.2)
+	if _find_button(main.menu, "SET COURSE") == null:
+		return _fail("full hold: market shows no SET COURSE to a buyer")
+	main.menu._select("hangar")
+	await _wait(0.2)
+	main.menu._shipyard_finder()
+	if _find_button(main.menu, "SET COURSE") == null and _find_button(main.menu, "COURSE SET") == null:
+		return _fail("hangar: no SET COURSE to a shipyard")
+	main.menu._select("missions")
+	for g in GameState.cargo.keys():
+		GameState.sell(here, g)
 	var need: String = Galaxy.station(here)["needs"][0]
 	var n0 := Economy.sell_price(here, need)
 	Economy.start_event("festival", here, need, 300.0)

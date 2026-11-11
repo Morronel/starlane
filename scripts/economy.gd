@@ -130,15 +130,30 @@ func ratio(sid: String, g: String) -> float:
 	return clampf(stock[sid][g] / cap[sid][g], 0.0, 1.0)
 
 
-## What the station pays you for one unit.
-func sell_price(sid: String, g: String) -> int:
-	var f := clampf(1.8 - 1.35 * ratio(sid, g), 0.45, 1.8)
+## A unit's worth when the shelf holds `level` units (full shelf = cheap).
+func value_at(sid: String, g: String, level: float) -> int:
+	var r := 0.5
+	if cap.has(sid) and cap[sid].has(g):
+		r = clampf(level / cap[sid][g], 0.0, 1.0)
+	var f := clampf(1.8 - 1.35 * r, 0.45, 1.8)
 	return maxi(1, int(round(GOODS[g]["base"] * f)))
+
+
+func _level(sid: String, g: String) -> float:
+	return stock[sid][g] if stock.has(sid) and stock[sid].has(g) else 0.0
+
+
+## What the station pays you for one unit: priced at the shelf as it will be
+## once your unit is on it. Paired with buy_price (priced at the shelf before
+## the unit leaves it) this means buying a unit and selling it straight back
+## always loses the spread, however big the stack.
+func sell_price(sid: String, g: String) -> int:
+	return value_at(sid, g, _level(sid, g) + 1.0)
 
 
 ## What one unit costs you.
 func buy_price(sid: String, g: String) -> int:
-	return int(ceil(sell_price(sid, g) * (1.0 + SPREAD)))
+	return int(ceil(value_at(sid, g, _level(sid, g)) * (1.0 + SPREAD)))
 
 
 ## What a good sells for on average across every station that trades it.
@@ -365,6 +380,38 @@ func best_deals(here: String, space: int, money: int, memory: Dictionary, now: f
 			var hops := Galaxy.hops(Galaxy.system_of(here), Galaxy.system_of(sid))
 			out.append({"good": g, "buy": bp, "to": sid, "sell": sp, "profit_unit": int(pu), "units": units,
 				"profit": int(pu * units), "hops": hops, "age": now - float(m["t"]), "score": pu * units / (1.0 + hops * 0.6)})
+	out.sort_custom(func(a, b): return a["score"] > b["score"])
+	return out
+
+
+## Where a hold of goods would sell best, by the prices you know. One entry
+## per station: {to, value, profit, goods: [{good, units, price}], hops, age, score}.
+func sell_spots(here: String, hold: Dictionary, cost: Dictionary, memory: Dictionary, now: float) -> Array:
+	var out := []
+	for sid in memory:
+		if sid == here:
+			continue
+		var m: Dictionary = memory[sid]
+		var value := 0.0
+		var paid := 0.0
+		var lines := []
+		for g in hold:
+			var units := int(hold[g])
+			if units <= 0 or not m["p"].has(g):
+				continue
+			var sp: int = m["p"][g]
+			# selling a stack pushes the price down: estimate the average
+			var drop: float = 1.35 * GOODS[g]["base"] * 0.5 * units / maxf(cap.get(sid, {}).get(g, 100.0), 1.0)
+			var avg := maxf(1.0, sp - drop)
+			value += avg * units
+			paid += float(cost.get(g, 0))
+			lines.append({"good": g, "units": units, "price": sp})
+		if lines.is_empty():
+			continue
+		lines.sort_custom(func(a, b): return a["price"] * a["units"] > b["price"] * b["units"])
+		var hops := Galaxy.hops(Galaxy.system_of(here), Galaxy.system_of(sid))
+		out.append({"to": sid, "value": int(value), "profit": int(value - paid), "goods": lines, "hops": hops,
+			"age": now - float(m["t"]), "score": value / (1.0 + hops * 0.35)})
 	out.sort_custom(func(a, b): return a["score"] > b["score"])
 	return out
 
