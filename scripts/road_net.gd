@@ -313,6 +313,8 @@ static func _kmax(pts: Array) -> float:
 ## single ring at crossroads.
 func build_nodes(sky: Dictionary) -> void:
 	_build_tracks()
+	for t in tracks:
+		t.build_visuals(tracks)
 	_build_signs()
 	for nd in nodes:
 		if nd["kind"] != "hub" and nd["kind"] != "cross":

@@ -65,8 +65,35 @@ func build(points: Array, exit_defs: Array, mats: Dictionary, traffic_meshes: Ar
 		var s := curve.get_closest_offset(e["pos"])
 		exits.append({"name": e["name"], "s": s, "color": e.get("color", Color(0.3, 0.9, 1.0))})
 	_bake_curvature()
-	_build_tube(mats)
+	_mats = mats
 	_spawn_traffic(traffic_meshes, seed_val)
+
+
+## Tubes are meshed once the whole network exists (RoadNet.build_nodes), so a
+## road can stay out of the highway it peels off and the highway can open a
+## portal where the road leaves it, instead of one tube running inside the other.
+var _mats: Dictionary = {}
+var _cutters: Array = []
+
+
+func build_visuals(others: Array) -> void:
+	_cutters = []
+	for o in others:
+		if o != self and o.kind != kind and o.aabb.intersects(aabb):
+			_cutters.append(o)
+	_build_tube(_mats)
+
+
+## Is this point inside a tube that should hide our wall there? A road hides
+## inside a highway; a highway opens up where a road passes through its wall.
+func _cut(p: Vector3) -> bool:
+	for o in _cutters:
+		if not o.aabb.has_point(p):
+			continue
+		var d: float = (o.curve.get_closest_point(p) as Vector3).distance_to(p)
+		if d < o.radius * (0.985 if o.radius > radius else 1.0):
+			return true
+	return false
 
 
 ## Track frame at s: origin, right, up, forward.
@@ -173,22 +200,41 @@ func _build_tube(mats: Dictionary) -> void:
 	var n := int(ceil(length / step))
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hidden := PackedByteArray()
+	hidden.resize((n + 1) * (sides + 1))
 	for i in n + 1:
 		var s := minf(i * step, length)
 		var f := frame(s)
+		# only test rings that come anywhere near another tube
+		var near := false
+		for o in _cutters:
+			var c: Vector3 = f["origin"]
+			if o.aabb.grow(radius).has_point(c) and (o.curve.get_closest_point(c) as Vector3).distance_to(c) < o.radius + radius:
+				near = true
+				break
 		for k in sides + 1:
 			var a := TAU * k / sides
 			var dir: Vector3 = f["right"] * cos(a) + f["up"] * sin(a)
+			var v: Vector3 = f["origin"] + dir * radius
+			hidden[i * (sides + 1) + k] = 1 if near and _cut(v) else 0
 			st.set_normal(dir)
 			st.set_uv(Vector2(s, float(k) / sides))
 			# distance to the nearer end: the shader dims tubes where they
 			# bunch up at a junction so the overlap doesn't blow out
 			st.set_uv2(Vector2(minf(s, length - s), 0.0))
-			st.add_vertex(f["origin"] + dir * radius)
+			st.add_vertex(v)
 	for i in n:
 		for k in sides:
 			var a0 := i * (sides + 1) + k
 			var b0 := (i + 1) * (sides + 1) + k
+			var cut := 0
+			for q in [a0, a0 + 1, b0, b0 + 1]:
+				cut += hidden[q]
+			# a road keeps a wall panel unless it lies wholly inside the
+			# highway; a highway drops any panel the road pokes through, so
+			# the road's last panels fill the portal edge with no gap
+			if (hw and cut > 0) or (not hw and cut == 4):
+				continue
 			for idx in [a0, a0 + 1, b0 + 1, a0, b0 + 1, b0]:
 				st.add_index(idx)
 	_add_mesh(st.commit(), mats["tube_" + kind])
@@ -244,6 +290,8 @@ func _build_tube(mats: Dictionary) -> void:
 			for a in [0.25, 0.75, 1.25, 1.75]:
 				var d: Vector3 = f["right"] * cos(a * PI) + f["up"] * sin(a * PI)
 				var c: Vector3 = f["origin"] + d * radius
+				if _cut(c):
+					continue
 				var t1: Vector3 = f["fwd"] * 22.0
 				var t2: Vector3 = d.cross(f["fwd"]) * 22.0
 				for v in [c - t1, c + t2, c + t1, c - t1, c + t1, c - t2]:
@@ -253,6 +301,8 @@ func _build_tube(mats: Dictionary) -> void:
 	# junction rings at both ends
 	for e in exits:
 		var f := frame(e["s"])
+		if not hw and _cut(f["origin"]):
+			continue   # a road's end ring would float inside the highway
 		var g := MeshInstance3D.new()
 		g.mesh = mats["ring_" + kind]
 		add_child(g)
